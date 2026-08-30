@@ -17,7 +17,6 @@ __pycache__/
 *.log
 
 # 入力の絵（題材ごとに置き換わるのでリポジトリには入れない）
-/testimg/
-/testimg_*/
+/testimg*/
 
 .DS_Store

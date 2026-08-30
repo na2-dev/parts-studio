@@ -17,6 +17,7 @@ parts-studio 単体で動く形にするかは [#3](https://github.com/na2-dev/p
 parts-studio/
 ├── CONTEXT.md          用語集（Shape / Layout / Texture / Part / View …）
 ├── docs/
+│   ├── working-agreement.md  作業の進め方（ブランチ・レビュー・測り方）
 │   ├── adr/            決定の記録（8本）
 │   ├── measurements/   実測の記録。★履歴なので書き換えない（注記を足すだけ）
 │   ├── setup/          環境構築とこの文書
@@ -32,6 +33,8 @@ parts-studio/
 ├── scratch/            実行時の一時スクリプトとログ
 └── testimg*/           入力の絵（題材ごとに置き換わる）
 ```
+
+※ `.gitignore` のパターンと一致させること（`/testimg*/`）。
 
 ## 守ること
 

@@ -16,7 +16,6 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 | ✅ | 完了（`main` に入っている） |
 | 🔵 | 着手可能（前提が揃っている） |
 | ⏸ | 前提待ち |
-| 🧪 | 実験としては動いたが、リポジトリの成果物になっていない |
 
 ---
 
@@ -96,5 +95,7 @@ parts-studio 単体で動く形にするか、借りることを正式な前提�
 
 | 対象 | 由来 | 場所 |
 |---|---|---|
-| `bake_to_uv.py` / `crop_ref_for_part.py` / `retopo_quad.py` / `vox_only.py` / `remesh_blender.py` | ADR-0002 / ADR-0007 | [`experiments/`](../../experiments/README.md) |
+| `bake_to_uv.py` | ADR-0002 | [`experiments/`](../../experiments/README.md) |
+| `crop_ref_for_part.py` | — | 同上 |
+| `retopo_quad.py` / `vox_only.py` / `remesh_blender.py` | ADR-0007 | 同上 |
 | ADR-0006 の視点別合成 | ADR-0006 | コードは Windows 機の `TRELLIS.2/gen_blend.py`（リポジトリ外）。ADR-0008 に置き換わった |

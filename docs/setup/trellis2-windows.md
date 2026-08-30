@@ -7,6 +7,10 @@ ADR-0004 の方針（Windows ネイティブ＋ビルド済みホイール）の
 
 ## 置き場所
 
+> **作業ディレクトリ全体の構成は [directories.md](directories.md) を正とする。**
+> ここに書くのは、この手順で作るものだけ。
+
+
 ```
 C:\work\parts-studio\          ← このリポジトリの clone
   ├── TRELLIS.2\               ← 上流（clone、git管理外）
