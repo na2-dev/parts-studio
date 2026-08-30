@@ -1,5 +1,8 @@
 # UV展開を独立した工程にし、xatlas で自前に行う
 
+> **訂正あり（2026-08-30）**: xatlas を既定にする部分は実測で覆った。展開器より前に
+> リトポロジーが要る。[ADR-0007](0007-retopology-before-uv.md) を参照。
+
 Hunyuan3D 系の色塗りは内部で UV 展開まで行うため、上流のままだと同じ Shape に塗り直すたびに
 Layout が変わり、Texture どうしに互換性が無い。Texture の作り直しと差し替えを中心に据えたいので、
 形づくり・**UV展開**・色塗りの 3 工程に分け、Layout を確定させた Unwrapped Shape を第一級の
