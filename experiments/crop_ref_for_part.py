@@ -12,7 +12,7 @@
 # ここがずれると全部ずれる。
 #
 # 使いかた:
-#   python tools\crop_ref_for_part.py 全身.glb パーツ.glb 出力フォルダ ^
+#   python experiments\crop_ref_for_part.py 全身.glb パーツ.glb 出力フォルダ ^
 #       --front=正面.png --left=左.png --right=右.png --back=後ろ.png [--margin=0.06]
 import os, sys
 import numpy as np
@@ -20,11 +20,12 @@ import trimesh
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# ★experiments/ へ移したので、依存している道具は tools/ 側にある
+# ★experiments/ へ移したので、依存している道具は tools/ 側にある。
+#   HERE は足さない。ここに tools/ と同名のモジュールを置いたとき、
+#   本線側の import が黙ってこちらを掴むため。
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'tools'))
-sys.path.insert(0, HERE)
 import silhouette_iou as S                                  # noqa: E402
-from project_texture import arg, project, to_pixel          # noqa: E402
+from project_texture import arg                             # noqa: E402
 
 
 def to_yup(v):

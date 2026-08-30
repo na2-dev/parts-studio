@@ -11,7 +11,7 @@
 #   形の細部は法線マップで戻す方針（retopo_bake_blender.py 相当）。
 #
 # 使いかた:
-#   venv-bpy\Scripts\python.exe tools\retopo_quad.py 入力.glb 出力.glb [目標三角形数] [ボクセル幅]
+#   venv-bpy\Scripts\python.exe experiments\retopo_quad.py 入力.glb 出力.glb [目標三角形数] [ボクセル幅]
 import sys
 import bpy
 
