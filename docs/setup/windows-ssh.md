@@ -106,10 +106,14 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
   -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
 ```
 
-設定したパスが実在するか、その場で確かめる:
+`-Force` は既存の値があれば**上書き**する。間違ったパスを設定してしまった場合の直しにも、
+同じコマンドをそのまま使える（`Set-ItemProperty` を使っても結果は同じ）。
+
+設定したパスが実在するか、その場で確かめる。**`True` が出ること**:
 
 ```powershell
 Test-Path (Get-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell).DefaultShell
+Restart-Service sshd
 ```
 
 PowerShell 7 を使いたい場合は、**先に入れてから**パスを差し替える（`winget install Microsoft.PowerShell`）。
