@@ -1,5 +1,13 @@
 # テクスチャは Hunyuan3D-Paint 2.1 に作らせる（ADR-0006 を置き換える）
 
+> **追記（2026-08-31・[#3](https://github.com/na2-dev/parts-studio/issues/3)）**:
+> 塗りは parts-studio から呼べるようになった（`tools/make_texture.py`）。
+> パッチも parts-studio が持つ（[`patches/hunyuan3d-2.1_paint.patch`](../../patches/README.md)）。
+> **3d-studio の `hunyuan3d-2.1_all.patch` は使わない** ―― あちらは形づくり側
+> （`hy3dshape`）の変更も含み、parts-studio の形づくりは TRELLIS.2 なので不要。
+> 環境（5.8GB）は借りたままで、場所は差し替えられる。
+> 手順は [paint-environment.md](../setup/paint-environment.md)。
+
 ADR-0006 では、TRELLIS.2 のボクセル属性場を視点別に塗って法線で合成する方式を採った。
 しかし顔が最後まで直らなかった（[実測](../measurements/2026-08-30-face-quality.md) ほか）。
 原因は色の**表現**にある。TRELLIS.2 は色を 3 次元のボクセル場として持つため、全身で格子を

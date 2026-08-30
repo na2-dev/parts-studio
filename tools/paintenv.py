@@ -22,16 +22,40 @@ PYTHON = os.path.join('venv-21', 'Scripts', 'python.exe')
 UPSTREAM = 'Hunyuan3D-2.1'
 CHECKPOINT = os.path.join('ckpt', 'RealESRGAN_x4plus.pth')
 
-# ★CHECKPOINT はここに入れない。無くても上流の既定で塗れる（絵が少しぼやけるだけ）。
-#   必須にすると、重みを置き忘れただけで塗り自体が止まる
-REQUIRED = {
-    'Python 環境（venv-21）': PYTHON,
-    '上流の Hunyuan3D-2.1': UPSTREAM,
-}
+# ★高精細化の重みも必須にする（2026-08-31 実測）。
+#   当初は「無くても上流の既定で塗れる」と考えて外していたが誤りだった。
+#   上流は Hunyuan3DPaintPipeline.__init__ の中で RealESRGANer を組み立て
+#   （textureGenPipeline.py:88 → image_super_utils.py:25-27）、そこで
+#   torch.load が FileNotFoundError を投げる。実際に投げることを確認済み。
+#   しかも上流の既定 "ckpt/RealESRGAN_x4plus.pth" は cwd 相対で、
+#   make_texture が cwd を塗り環境にする以上【同じ場所】を指す。逃げ道は無い。
+#   ここで弾かないと、モデルを読み込んだ後に生の FileNotFoundError で落ちる。
+# ★ファイルかディレクトリかまで見る。exists だけだと、中断した clone が残した
+#   「Hunyuan3D-2.1 という名前のファイル」や、venv 作成に失敗して残った
+#   「python.exe という名前の空ディレクトリ」を「使える」と判定してしまう。
+#   そのまま進むと、親切な案内の無い生の PermissionError / OSError になる
+REQUIRED = (
+    ('Python 環境（venv-21）', PYTHON, 'file'),
+    ('上流の Hunyuan3D-2.1', UPSTREAM, 'dir'),
+    ('高精細化の重み', CHECKPOINT, 'file'),
+)
 
 
 def repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def specified(explicit=None):
+    """人が明示的に指した場所を (説明, 場所) で返す。無ければ None。
+
+    ★--paint-root は環境変数を【上書きする】。両方見ると、有効な
+      --paint-root を渡しても古い環境変数のせいで止まってしまう。
+    """
+    if explicit:
+        return ('--paint-root', explicit)
+    if os.environ.get(ENV_VAR):
+        return (f'環境変数 {ENV_VAR}', os.environ[ENV_VAR])
+    return None
 
 
 def candidates(explicit=None, root=None):
@@ -39,19 +63,31 @@ def candidates(explicit=None, root=None):
     if root is None:
         root = repo_root()
     out = []
-    if explicit:
-        out.append(explicit)
-    if os.environ.get(ENV_VAR):
-        out.append(os.environ[ENV_VAR])
+    got = specified(explicit)
+    if got:
+        out.append(got[1])
     out.append(os.path.join(root, 'paint'))
     out.append(BORROWED)
     return out
 
 
+def is_borrowed(path):
+    r"""借り物の環境かどうか。
+
+    ★normcase を通す。Windows のパスは大文字小文字を区別しないので、
+      z:\work\3d-studio と書かれただけで「借りています」が出なくなる。
+      出ないことを自前環境の証拠に使う手順書があるので、外すと誤認につながる。
+    """
+    def key(p):
+        return os.path.normcase(os.path.abspath(p))
+    return key(path) == key(BORROWED)
+
+
 def missing_parts(path):
     """path に足りないものを {説明: 相対パス} で返す。空なら使える。"""
-    return {name: rel for name, rel in REQUIRED.items()
-            if not os.path.exists(os.path.join(path, rel))}
+    check = {'file': os.path.isfile, 'dir': os.path.isdir}
+    return {name: rel for name, rel, kind in REQUIRED
+            if not check[kind](os.path.join(path, rel))}
 
 
 def find(explicit=None, root=None):
@@ -63,10 +99,9 @@ def find(explicit=None, root=None):
     #   黙って別の環境へ落ちると、指したつもりの無い環境で塗った結果が返り、
     #   なぜ設定が効かないのか分からなくなる。
     #   自動で探す paint/ と借り物は「指定」ではないので、落ちてよい
-    for label, path in (('--paint-root', explicit),
-                        (f'環境変数 {ENV_VAR}', os.environ.get(ENV_VAR))):
-        if not path:
-            continue
+    got = specified(explicit)
+    if got:
+        label, path = got
         lack = missing_parts(path)
         if lack:
             lines = [f'{label} に指定された場所が使えません: {path}']
@@ -78,8 +113,7 @@ def find(explicit=None, root=None):
     for path in candidates(explicit, root):
         lack = missing_parts(path)
         if not lack:
-            return (path, os.path.join(path, PYTHON),
-                    os.path.abspath(path) == os.path.abspath(BORROWED))
+            return (path, os.path.join(path, PYTHON), is_borrowed(path))
         tried.append((path, lack))
 
     lines = ['塗り環境が見つかりません。探した場所:']

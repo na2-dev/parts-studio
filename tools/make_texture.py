@@ -45,11 +45,31 @@ def parse_args(argv=None):
     for name in ('texsize', 'rendersize', 'views', 'res'):
         if getattr(a, name) < 1:
             p.error(f'--{name} は 1 以上にすること。受け取った値: {getattr(a, name)}')
-    # ★--out の妥当性は塗りの【前】に見る。1分かけた後に落とさないため
-    if not os.path.splitext(a.out)[1]:
-        p.error(f'--out には拡張子を付けること（例 out\\painted.glb）。'
+    # ★--out の妥当性は塗りの【前】に見る。1分かけた後に落とさないため。
+    #   .glb 限定にするのは、塗りの実体が stem（拡張子を外したもの）から
+    #   .obj / .jpg などの中間ファイル名を作るため。--out=x.obj だと
+    #   出力先と中間ファイルが同じ名前になり、自分自身を上書きする
+    if os.path.splitext(a.out)[1].lower() != '.glb':
+        p.error(f'--out は .glb にすること（例 out\\painted.glb）。'
                 f'受け取った値: {a.out}')
+    if os.path.abspath(a.mesh) == os.path.abspath(a.out):
+        p.error(f'--mesh と --out が同じです。入力の形が消えます: {a.out}')
     return a
+
+
+def child_env():
+    """別環境へ渡す環境変数。
+
+    ★PYTHONPATH と PYTHONHOME は落とす。ここは Python 3.11 で、
+      子は 3.12。親の PYTHONPATH に形づくり側の道（TRELLIS.2 など）が
+      入っていると、3.12 が 3.11 向けの拡張モジュールを拾って
+      「DLL load failed」になる。分けるために別プロセスにしている以上、
+      環境変数も分けきる。
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('PYTHONPATH', 'PYTHONHOME')}
+    env.update(PYTHONIOENCODING='utf-8', PYTHONUTF8='1', PYTHONNOUSERSITE='1')
+    return env
 
 
 def build_command(python, args, paint_root):
@@ -82,12 +102,11 @@ def main(argv=None):
     else:
         print(f'塗り環境: {root}', flush=True)
 
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     print(f'塗り: {os.path.basename(args.mesh)} / テクスチャの器 {args.texsize}'
           f'（実際に出る絵は {args.texsize // 2}）', flush=True)
     # ★cwd は塗り環境。上流が相対パスで同梱のものを読む場面があるため
-    r = subprocess.run(build_command(python, args, root), cwd=root,
-                       env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1'))
+    r = subprocess.run(build_command(python, args, root), cwd=root, env=child_env())
     if r.returncode != 0:
         raise SystemExit(f'塗りに失敗しました（終了コード {r.returncode}）')
     if not os.path.isfile(args.out):

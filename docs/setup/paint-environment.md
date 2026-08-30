@@ -4,19 +4,19 @@
 **形づくりとは別の Python 環境**で動く。この文書はその環境の作り方と、
 いまそれを借りている事実を記録する。
 
-## いまの状態: 借りている
+## いまの状態: 環境だけを借りている
 
-**parts-studio 単体では塗れない。** 塗り環境は `Z:\work\3d-studio` にある
-3d-studio のものを借りている。`tools/make_texture.py` は実行時に必ずこう表示する。
+**塗りのコードは parts-studio が持っている**（`tools/paint_backend.py`）。
+3d-studio の `paint21_pipeline.py` は呼ばない。
+
+借りているのは**環境だけ**で、それがまだリポジトリの外（`Z:\work\3d-studio`）に
+あるため、**parts-studio を clone しただけでは塗れない**。
+`tools/make_texture.py` は借りているとき必ずこう表示する。
 
 ```
 ※ 塗り環境を借りています: Z:\work\3d-studio
    parts-studio 単体で動かすには docs/setup/paint-environment.md
 ```
-
-借りているのは**環境（venv-21・上流のリポジトリ・重み）だけ**で、
-**塗りのコードは parts-studio が持っている**（`tools/paint_backend.py`）。
-3d-studio 側の `paint21_pipeline.py` は呼ばない。
 
 | 借りているもの | 大きさ |
 | :--- | ---: |
@@ -40,31 +40,40 @@
 
 `tools/paintenv.py` が次の順で探す。
 
-1. `--paint-root` で明示
-2. 環境変数 `PARTS_STUDIO_PAINT_ROOT`
-3. リポジトリ直下の `paint/`（下の手順で作った場合）
-4. `Z:\work\3d-studio`（借り物・当面の既定）
+1. **人が指定した場所**（1 つだけ）
+   - `--paint-root` があればそれ
+   - 無ければ環境変数 `PARTS_STUDIO_PAINT_ROOT`
+   - **`--paint-root` は環境変数を上書きする。** 両方見ると、有効な `--paint-root` を
+     渡しても古い環境変数のせいで止まってしまうため
+2. リポジトリ直下の `paint/`（下の手順で作った場合）
+3. `Z:\work\3d-studio`（借り物・当面の既定）
 
-**1 と 2 で指した場所が使えないときは、他を探さずにその場で止まる。**
+**1 で指した場所が使えないときは、2・3 を探さずにその場で止まる。**
 黙って別の環境へ落ちると、指したつもりの無い環境で塗った結果が返るため。
-3 と 4 は「指定」ではないので、揃っていなければ次へ落ちる。
+2 と 3 は「指定」ではないので、揃っていなければ次へ落ちる。
 
-「使える」の判定は次の 2 つが揃っていること。
+「使える」の判定は次の 3 つが揃っていること。
 
-- `venv-21\Scripts\python.exe`
-- `Hunyuan3D-2.1\`
+| | 無いとどうなるか |
+| :--- | :--- |
+| `venv-21\Scripts\python.exe` | 起動できない |
+| `Hunyuan3D-2.1\` | 上流を import できない |
+| `ckpt\RealESRGAN_x4plus.pth` | **モデルを読み込んだ後に生の `FileNotFoundError` で落ちる** |
 
-`ckpt/RealESRGAN_x4plus.pth` は**判定に入れない**。無くても上流の既定で塗れる
-（6方向の絵を 4 倍に伸ばすときの絵が少しぼやけるだけ）。必須にすると、
-重みを置き忘れただけで塗り自体が止まってしまう。
+重みを判定に入れているのは、上流が `Hunyuan3DPaintPipeline.__init__` の中で
+これを読むため（`textureGenPipeline.py:88` → `image_super_utils.py:25-27`）。
+**上流の既定 `"ckpt/RealESRGAN_x4plus.pth"` は cwd 相対**で、`make_texture.py` が
+cwd を塗り環境にする以上まったく同じ場所を指すので、逃げ道は無い
+（2026-08-31 に `RealESRGANer` へ存在しないパスを渡して `FileNotFoundError` を確認）。
 
 ## 自前で作る手順
 
 以下は `C:\work\parts-studio\paint\` に作る場合。作り終えたら `--paint-root` も
 環境変数も要らなくなる（候補 3 で見つかる）。
 
-> **未検証**: この手順は 3d-studio の構築記録から起こしたもので、
+> **未検証**: 以下 1〜6 の手順は 3d-studio の構築記録から起こしたもので、
 > parts-studio 側でまだ通していない。実行したら結果をここに追記すること。
+> **末尾の「実測」は借り物の環境で測ったものなので、そちらは実測値である。**
 
 ### 1. 上流を取ってくる
 
@@ -78,7 +87,10 @@ git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git
 
 `hy3dpaint/DifferentiableRenderer/mesh_utils.py` の `import bpy` を
 try/except にする。**bpy は Python 3.11 用しか無く、この環境（3.12）には入らない。**
-使っているのは最後の OBJ→GLB 変換だけなので、無くても動く。
+
+その代わり**上流の OBJ→GLB 変換は動かなくなる**（静かに失敗して `False` を返す）。
+glb は `paint_backend.py` が `.obj` から作るので困らない。詳しくは
+[patches/README.md](../../patches/README.md)。
 
 ```powershell
 git -C Hunyuan3D-2.1 apply ..\..\patches\hunyuan3d-2.1_paint.patch
@@ -125,7 +137,9 @@ cd C:\work\parts-studio
   --front=testimg\front.png --out=out\painted.glb
 ```
 
-「※ 塗り環境を借りています」が**出なければ**自前の環境が使われている。
+1 行目が `塗り環境: C:\work\parts-studio\paint` なら自前の環境。
+`※ 塗り環境を借りています` なら借り物のまま。**どちらか必ず出る**ので、
+何も出ない場合は実行そのものが失敗している。
 
 ## 上流をそのままでは動かせない箇所（2つ）
 
@@ -166,22 +180,36 @@ NameError: name 'meshVerticeInpaint' is not defined
 | **`texture_size` の半分しか出ない** | 仕様。器 4096 → 実際に出る絵は 2048（実測）。既定を下げると黙って解像度が落ちるので `--texsize` は既定のまま使う |
 | **渡した形が作り直される**（`white_mesh_remesh.obj` が出る） | `use_remesh` の既定が True。`paint_backend.py` は必ず False で呼ぶ。True だとリトポロジー済みの形もパーツ分割した形も置き換わる |
 | **金属・ざらつきが glb に入らない** | 2.1 は別々の `.jpg` で出し、同時に書き出す `.glb` には入れない。`attach_pbr()` が glTF の決まり（G=ざらつき / B=金属）で1枚にまとめて入れ直す |
+| **2回目の実行で前回の形が出る** | 前回の `.glb` が残っていると「上流が書いた」と誤判定する。`paint_backend.clear_stale()` が実行前に中間ファイルを消して塞いでいる。エラーが一切出ないので、消さない実装に戻すと気づけない |
 | `ModuleNotFoundError: No module named 'realesrgan'` | 手順 3 の最終行を実行する |
 | RTX 3070 で動かない | VRAM ではなく sm_86 向け `custom_rasterizer` カーネルの不在 |
 | VRAM が足りない | 使用 13.41GB・確保 20.41GB（実測）。面数を減らしても器を下げてもほとんど変わらない。**8GB 機では通らない** |
 
 ## 実測（2026-08-31・RTX 4070 Ti SUPER 16GB）
 
-借り物の環境（`Z:\work\3d-studio`）を parts-studio の `tools/make_texture.py` から呼んだ結果。
+借り物の環境（`Z:\work\3d-studio`）を parts-studio の `tools/make_texture.py` から
+既定の設定（`--texsize=4096 --rendersize=1024 --views=6 --res=512`）で呼んだ結果。
+
+対象は、この日 parts-studio 側で作り直した形
+（`tools/make_shape.py` → `tools/retopo_shrinkwrap.py`）。
 
 | 項目 | 値 |
 | :--- | :--- |
 | 対象 | リトポロジー済みの全身 42,088 面 |
-| 時間 | **61.5 秒** |
+| 時間 | **初回 61.5 秒 / 2 回目以降 49 秒**（初回はモデルの読み込みを含む） |
 | VRAM | 使用 13.41GB・確保 20.41GB |
 | 出たテクスチャ | 2048×2048（器 4096 の半分） |
 | 穴埋め | 6,957,517 画素 |
 | PBR | `metallicRoughnessTexture` 2048px / `metallicFactor=0.0` / `roughnessFactor=1.0` |
+
+> **[2026-08-30 の実測](../measurements/2026-08-30-hunyuan-paint.md)との差について。**
+> あちらは 42,084 面で 55.8 秒。面数が 4 つ違うのは**別のメッシュだから**で
+> （あちらは 3d-studio が作った形、こちらは parts-studio が作り直した形）、
+> 時間の差もそこから来ている。VRAM とテクスチャ寸法が一致するのは、
+> どちらもモデル側で決まる値で面数にほとんど左右されないため
+> （面数を 896,424 → 60,000 に減らしても変わらなかった、という実測がある）。
+> **基準値として比べるならこちらを使う**（parts-studio の経路で測ったもの）。
+> 詳しくは [2026-08-31 の実測](../measurements/2026-08-31-paint-from-parts-studio.md)。
 
 HuggingFace の同意が要るモデルは**塗り側には無い**
 （`tencent/Hunyuan3D-2.1` と `facebook/dinov2-giant` はトークン無しで取得できる）。

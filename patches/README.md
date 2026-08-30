@@ -9,17 +9,42 @@
 ## なぜ bpy を外すのか
 
 **bpy は Python 3.11 用しか無く、塗り環境（3.12）には入らない。**
-上流がこれを使っているのは最後の OBJ→GLB 変換だけで、
-`paint_backend.py` は `save_glb=True` の経路を使うので通らない。
+パッチが無いと `import bpy` の `ImportError` でモジュールごと読めない。
+**このパッチが避けているのはそれだけ**である。
+
+### その結果、上流は glb を書かない（2026-08-31 に確定）
+
+上流が bpy を使っているのは `convert_obj_to_glb` だけだが、その中身は
+`try: ... except Exception: return False`（`mesh_utils.py:274-290`）。
+`bpy = None` にすると `bpy.ops.wm.obj_import` が `AttributeError` になり、
+**呼び出し側には何も伝わらないまま False が返る**（`textureGenPipeline.py:188-190` は
+戻り値を見ていない）。venv-21 に `bpy` が入っていないことも実測で確認済み。
+
+したがって `save_glb=True` を渡しても `.glb` は**一度もできない**。
+glb は必ず `paint_backend.py` 側が `.obj` から作っている。
+
+**ここに落とし穴がある。** 前回の `.glb` が残っていると「上流が書いた」と
+誤判定して古い形を使ってしまうので、`paint_backend.clear_stale()` が
+実行前に中間ファイルを消している。
 
 ## 当てかた
 
+`paint/` の中（`Hunyuan3D-2.1/` の親）で実行する。
+
 ```powershell
+cd C:\work\parts-studio\paint
 git -C Hunyuan3D-2.1 apply ..\..\patches\hunyuan3d-2.1_paint.patch
 ```
 
 `--depth 1` の clone の HEAD に対して当てる前提。上流が該当箇所を書き換えると
-当たらなくなるので、失敗したら手で同じ変更を入れる（3行の try/except）。
+当たらなくなる。失敗したら `import bpy` を手で次の 4 行に置き換える。
+
+```python
+try:
+    import bpy
+except ImportError:
+    bpy = None
+```
 
 ## ここに入れないもの
 
