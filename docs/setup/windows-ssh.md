@@ -51,9 +51,20 @@ Mac 側には一律 `Permission denied (publickey,password,keyboard-interactive)
 | 1 | **PEM 形式の公開鍵を貼った** | `ssh-keygen -y -f ~/.ssh/win.key` の一行形式を使う |
 | 2 | **置き場所が違う** — 管理者グループのユーザーは `~/.ssh/authorized_keys` が**読まれない**。`C:\ProgramData\ssh\administrators_authorized_keys` のほうが読まれる | 手順4-a で所属を確認してから置く |
 | 3 | **BOM が入った** — Windows PowerShell 5.1 の `Add-Content -Encoding utf8` は **BOM 付き**で書く。1行目が `<BOM>ssh-rsa ...` になり鍵として読めない | `Add-Content` を使わず `[System.IO.File]::WriteAllText` で BOM なし固定にする |
+| 4 | **`DefaultShell` に存在しないパスを設定した** — 手順3 で PowerShell 7 のパスを入れたのに PS7 が入っていない、など。sshd は**鍵を見る前にログインを拒否する**ので、鍵の問題と区別がつかない | 実在するパスを設定する。実際に踏んだ（下記） |
 
 加えて、`administrators_authorized_keys` は ACL を Administrators と SYSTEM だけに絞らないと
 無視される（これも無言）。
+
+罠4 は実際に踏んだ。Windows 側のログにだけ理由が出た:
+
+```
+sshd: User k2187 not allowed because shell c://program files//powershell//7//pwsh.exe does not exist
+sshd: Connection closed by invalid user k2187 192.168.3.5 port 50871
+```
+
+**この4つはどれも Mac 側では同じ `Permission denied (publickey,password,keyboard-interactive)` に
+なる。** 鍵まわりを疑う前に、まず Windows 側のログを見ること。
 
 ---
 
@@ -87,15 +98,21 @@ whoami
 
 これをやらないと SSH 越しのシェルが `cmd` になり、扱いにくい。
 
+**★存在しないパスを入れると、sshd は鍵を見る前にログインを拒否する（罠4）。**
+この機体には PowerShell 7 が入っていないので、標準の 5.1 を指す。
+
 ```powershell
-# Windows 標準の PowerShell 5.1 を使う場合
 New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
   -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
-
-# PowerShell 7 が入っているならこちらのほうが良い
-New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
-  -Value "C:\Program Files\PowerShell\7\pwsh.exe" -PropertyType String -Force
 ```
+
+設定したパスが実在するか、その場で確かめる:
+
+```powershell
+Test-Path (Get-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell).DefaultShell
+```
+
+PowerShell 7 を使いたい場合は、**先に入れてから**パスを差し替える（`winget install Microsoft.PowerShell`）。
 
 ## 手順4: 公開鍵を登録する（Windows 側・管理者）
 
