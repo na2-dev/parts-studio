@@ -13,12 +13,13 @@ Job は 4 View すべてが揃ってはじめて成立する。
 _Avoid_: アングル、視点、カメラ、面
 
 **Reference View（基準の向き）**:
-形づくりの条件として実際にモデルへ渡す View。現在は front のみ。
+形づくりの条件として実際にモデルへ渡す View。現在は 4 View すべてが Reference View である。
 _Avoid_: 入力画像、条件画像、プロンプト画像
 
 **Check View（検算の向き）**:
 条件には使わず、出来上がった Part を同じ向きから撮って絵と見比べるために使う View。
-現在は left / right / back の 3 つ。ここが合わないことは、形が絵から外れた証拠になる。
+**現在は存在しない。** 4 View すべてを条件に使うようになったため、条件に使っていない向きが
+無くなった。検算は同じ絵との見比べで行う。
 _Avoid_: 参考画像、検証画像、テスト画像
 
 **Shape（形）**:
@@ -34,8 +35,13 @@ Layout に従って Shape へ貼られる画像の組（色・法線・金属・
 _Avoid_: 色、マテリアル、スキン、見た目
 
 **Unwrapped Shape（展開済みの形）**:
-Shape に Layout を焼き付けたもの。第一級の保存物であり、これ 1 つに対して Texture を何度でも
-作り直せる。
+Shape に Layout を焼き付けたもの。
+
+**現在この状態は保存していない。** 色塗り工程（Hunyuan3D-Paint）が Layout を自分で張るため、
+同じ Shape に塗り直すたびに Layout が変わり、Texture どうしに互換性が無い。
+「同じ Layout のまま Texture だけ差し替える」ことは今はできない。
+経緯は [ADR-0002](docs/adr/0002-unwrap-is-its-own-stage-using-xatlas.md) と
+[ADR-0008](docs/adr/0008-texture-by-hunyuan3d-paint.md) を参照。
 _Avoid_: UV付きメッシュ、下地、ベースモデル
 
 **Part（パーツ）**:

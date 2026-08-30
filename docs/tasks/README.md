@@ -38,8 +38,12 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 **A-3 は完了済み**: `experiments/remesh_blender.py` は QuadriFlow が通らず使えなかったが、
 `tools/retopo_shrinkwrap.py` が「ボクセル化 → 元表面へスナップ」を 1 コマンドで行う。
 
-**A-4 の注意**: いま塗りは `Z:\work\3d-studio` の `venv-21` を借りている。
-parts-studio 単体で動く形にするか、借りることを正式な前提として文書化するかを決める必要がある。
+**A-4 の決着（2026-08-31）**: **コードは parts-studio が持ち、環境は借りたままにする。**
+塗りの実体は `tools/paint_backend.py`（parts-studio のもの）で、3d-studio の
+`paint21_pipeline.py` は呼ばない。5.8GB の環境（`venv-21` / `Hunyuan3D-2.1` / 重み）だけを
+`Z:\work\3d-studio` から借りており、場所は `--paint-root` と環境変数
+`PARTS_STUDIO_PAINT_ROOT` で差し替えられる。借りていることは実行時に必ず表示する。
+自前で作る手順は [paint-environment.md](../setup/paint-environment.md)（**まだ通していない**）。
 
 **A-7 の注意**: 「首の高さの自動検出」「ならし 8 回」「切る高さ 0.033」などは、
 すべて 1 体だけで調整した値。別の絵で通らない可能性がある。
