@@ -1,0 +1,21 @@
+# 外部リポジトリ（clone して使う。手順は docs/setup/trellis2-windows.md）
+/TRELLIS.2/
+/_wheels/
+
+# Python
+/venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 実行時の生成物
+/output/
+*.glb
+*.ply
+
+# 手元だけの検証スクリプト
+/smoke_*.py
+/hfcheck*.py
+/dl_weights.py
+
+.DS_Store
