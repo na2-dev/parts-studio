@@ -167,8 +167,8 @@ OK
 ## 現状
 
 - 1〜5: 完了。`trellis2` の両パイプラインが import できるところまで確認済み
-- 6: `microsoft/TRELLIS.2-4B`（16.24GB）を取得中。**`facebook/dinov3-vitl16` は承認待ち（403）**
-- 実際に絵から glb を作るところは未着手
+- 6: `microsoft/TRELLIS.2-4B`（15.12GB・22ファイル）取得済み。**`facebook/dinov3-vitl16` は承認待ち（403）**
+- DINOv2-large を代役にした実測で、`1024_cascade` が 46 秒 / VRAM 2.9GB / RAM 22.2GB で通ることを確認済み（[実測](../measurements/2026-08-30-trellis2-memory.md)）。**形の品質は DINOv3 の承認後にやり直す**
 
 ## ハマったところ
 

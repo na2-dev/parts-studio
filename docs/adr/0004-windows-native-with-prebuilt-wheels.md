@@ -14,9 +14,14 @@ WSL2 は採らない。ホイールがある以上ビルドの利点が消える
 半分しか VM に渡さないため、システム RAM 32GB の手元機ではむしろ不利になる。
 
 メモリが足りない場合の退避路を 3 段用意しておく: bf16 → `fp8.safetensors` → GGUF
-（`Aero-Ex/Trellis2-GGUF` に Q4_K_M / Q5_K_M / Q6_K / Q8_0 がある）。この GGUF 配布には
-DINOv3 の重みも同梱されているため、gated の手動承認を回避する道にもなる。なお TRELLIS.2 の
-「4B」は 1.3B の DiT 3 本（refiner / shape / tex）の合計であり、1 本ずつ差し替えられる。
+（`Aero-Ex/Trellis2-GGUF` に Q4_K_M / Q5_K_M / Q6_K / Q8_0 がある）。なお TRELLIS.2 の「4B」は
+1.3B の DiT が **5 本**（`ss_flow_64` / `img2shape_512` / `img2shape_1024` / `imgshape2tex_512` /
+`imgshape2tex_1024`、各 2.58GB）＋ エンコーダ・デコーダで、重み全体は 16.24GB。実行時は解像度に
+応じて 3 本ずつ使う。1 本ずつ差し替えられる。
+
+**2026-08-30 の実測では、この退避路は使わずに済んだ**
+（[実測](../measurements/2026-08-30-trellis2-memory.md)）。bf16 のまま `1024_cascade` が
+VRAM ピーク 2.9GB / RAM ピーク 22.2GB / 46 秒で通っている。
 
 ## Consequences
 
