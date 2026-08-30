@@ -273,7 +273,8 @@ def test_paint_rootが相対でも絶対にして渡す():
     cmd = make_texture.build_command('py.exe', a, 'paint')
     assert cmd[5] == f'--paint-root={os.path.abspath("paint")}'
     assert cmd[5] != '--paint-root=paint'
-    assert cmd[6:] == ['--texsize=4096', '--rendersize=1024', '--views=6', '--res=512']
+    assert cmd[6:] == ['--texsize=4096', '--rendersize=1024', '--views=6',
+                       '--res=512', '--up=z']
 
 
 def test_塗りの実体は自分のリポジトリのものを使う():
@@ -691,3 +692,51 @@ def test_attach_pbrはglbを読む前にマップを確認する(tmp_path):
     with pytest.raises(SystemExit) as e:
         paint_backend.attach_pbr(str(tmp_path / '存在しない.glb'), str(tmp_path / 'p'))
     assert '金属・ざらつきのマップが見つかりません' in str(e.value)
+
+
+# ---- 上流は Y上 を前提にしている（2026-08-31 実測） -----------------------
+
+def test_塗りへ渡す上方向の既定はz():
+    # ★このパイプラインの中身は Z上。Y上に直さずに渡すと、球に近い頭で
+    #   前後を取り違えて顔が裏側に付く（実測で確認した）
+    a = make_texture.parse_args(['--mesh', 'm.glb', '--front', 'f.png', '--out', 'o.glb'])
+    assert a.up == 'z'
+    b = paint_backend.parse_args(['m.glb', 'f.png', 'o.glb', '--paint-root', 'x'])
+    assert b.up == 'z'
+
+
+def test_上方向はコマンドへ渡る(tmp_path):
+    a = make_texture.parse_args(['--mesh', 'm.glb', '--front', 'f.png',
+                                 '--out', 'o.glb', '--up', 'y'])
+    assert '--up=y' in make_texture.build_command('p', a, str(tmp_path))
+
+
+def test_知らない上方向は拒む():
+    for argv in (['--mesh', 'm.glb', '--front', 'f.png', '--out', 'o.glb', '--up', 'x'],):
+        with pytest.raises(SystemExit):
+            make_texture.parse_args(argv)
+    with pytest.raises(SystemExit):
+        paint_backend.parse_args(['m.glb', 'f.png', 'o.glb', '--paint-root', 'x',
+                                  '--up', 'x'])
+
+
+def test_Z上とY上の変換は往復する():
+    np = pytest.importorskip('numpy')
+    v = np.array([[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0]])
+    assert np.allclose(paint_backend.to_zup(paint_backend.to_yup(v)), v)
+
+
+def test_Z上をY上にすると背の高さがYへ移る():
+    np = pytest.importorskip('numpy')
+    v = np.array([[0.0, 0.0, 0.0], [0.4, 0.3, 1.0]])       # Z が一番長い
+    out = paint_backend.to_yup(v)
+    ext = out.max(0) - out.min(0)
+    assert int(np.argmax(ext)) == 1
+    assert list(ext) == [0.4, 1.0, 0.3]
+
+
+def test_正面の向きが保たれる():
+    # ★内部の規約は「正面が -Y」。Y上に直すと「正面が +Z」になる
+    np = pytest.importorskip('numpy')
+    front = np.array([[0.0, -1.0, 0.0]])                   # 内部の正面
+    assert list(paint_backend.to_yup(front)[0]) == [0.0, 0.0, 1.0]

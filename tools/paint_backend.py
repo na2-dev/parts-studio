@@ -16,6 +16,11 @@
 # ★texture_size の【半分】が実際に出る絵の大きさ（実測 4096→2048、2048→1024）
 #   下げても VRAM はほとんど変わらない（確保 20.4GB と 19.2GB）ので既定は 4096。
 #
+# ★塗り工程へ渡すメッシュは【Y上】でなければならない（2026-08-31 実測）
+#   Z上のまま渡すと、球に近い頭で前後を取り違え、顔が頭の裏側に付く。
+#   胴体は輪郭で前後が分かるので気づきにくいが、頭は壊れる。
+#   --up=z（既定）なら、渡す前に Y上へ直し、返ってきたものを Z上へ戻す。
+#
 # ★出来上がるまで --out には何も置かない
 #   途中で落ちたときに中途半端な glb が残ると、次の実行や下流の工程が
 #   それを完成品として掴む。作業用の名前で作り、全部終わってから置き換える。
@@ -28,6 +33,20 @@ import time
 ARTIFACTS = ('.glb', '.obj', '.mtl', '.jpg',
              '_metallic.jpg', '_roughness.jpg', '_in.obj')
 WORK_SUFFIX = '_work.glb'
+
+
+def to_yup(v):
+    """Z上 -> Y上。(x, y, z) -> (x, z, -y)"""
+    import numpy as np
+    v = np.asarray(v, dtype=np.float64)
+    return np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)
+
+
+def to_zup(v):
+    """Y上 -> Z上。to_yup の逆。"""
+    import numpy as np
+    v = np.asarray(v, dtype=np.float64)
+    return np.stack([v[:, 0], -v[:, 2], v[:, 1]], 1)
 
 
 def use_utf8_stdout():
@@ -258,6 +277,15 @@ def attach_pbr(glb_path, stem):
           f'ざらつきの平均 {np.asarray(r_im).mean():.0f}）', flush=True)
 
 
+def restore_up(glb_path):
+    """Y上で塗った結果を Z上へ戻す（UVと材質は保つ）。"""
+    import trimesh
+    m = trimesh.load(glb_path, force='mesh', process=False)
+    m.vertices = to_zup(m.vertices)
+    m.export(glb_path)
+    print('  Z上へ戻しました', flush=True)
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description='形に色を塗る（venv-21 の中で動く）')
     p.add_argument('mesh', help='塗る対象の形の glb')
@@ -265,6 +293,9 @@ def parse_args(argv=None):
     p.add_argument('out', help='出力する glb')
     p.add_argument('--paint-root', required=True,
                    help='Hunyuan3D-2.1 と ckpt がある場所')
+    p.add_argument('--up', choices=['y', 'z'], default='z',
+                   help='渡すメッシュの上方向。★上流は Y上 を前提にしている。'
+                        'z なら渡す前に直し、返ってきたものを戻す')
     p.add_argument('--texsize', type=int, default=4096)
     p.add_argument('--rendersize', type=int, default=1024)
     p.add_argument('--views', type=int, default=6)
@@ -302,8 +333,13 @@ def main(argv=None):
 
     out, stem = prepare_output(args.out)
     m = trimesh.load(args.mesh, force='mesh')
+    verts = m.vertices
+    if args.up == 'z':
+        # ★上流は Y上 を前提にしている。Z上のまま渡すと頭の前後を取り違える
+        print('  Y上に直して渡します（返ってきたら Z上へ戻します）', flush=True)
+        verts = to_yup(verts)
     obj_in = stem + '_in.obj'
-    trimesh.Trimesh(vertices=m.vertices, faces=m.faces).export(obj_in)
+    trimesh.Trimesh(vertices=verts, faces=m.faces).export(obj_in)
 
     conf = configure(Hunyuan3DPaintConfig(args.views, args.res), args, repo, root)
     print(f'色塗り(2.1): 面 {len(m.faces):,} / テクスチャの器 {conf.texture_size}'
@@ -336,6 +372,8 @@ def main(argv=None):
             raise SystemExit('色塗り(2.1) の出力が見つかりません')
         trimesh.load(got, force='mesh').export(work)
     attach_pbr(work, stem)
+    if args.up == 'z':
+        restore_up(work)                       # ★渡されたときの向きに戻す
     os.replace(work, out)
     print(f'保存: {args.out}', flush=True)
     return 0

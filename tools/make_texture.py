@@ -41,6 +41,9 @@ def parse_args(argv=None):
     p.add_argument('--views', type=int, default=6, help='生成する向きの数')
     p.add_argument('--res', type=int, default=512,
                    help='多視点で生成する絵の大きさ。★上げると実用外に遅い')
+    p.add_argument('--up', choices=['y', 'z'], default='z',
+                   help='渡す形の上方向。★上流は Y上 を前提にしている。'
+                        'このパイプラインの中身は Z上 なので既定は z')
     a = p.parse_args(argv)
     for name in ('texsize', 'rendersize', 'views', 'res'):
         if getattr(a, name) < 1:
@@ -86,7 +89,8 @@ def build_command(python, args, paint_root):
             f'--texsize={args.texsize}',
             f'--rendersize={args.rendersize}',
             f'--views={args.views}',
-            f'--res={args.res}']
+            f'--res={args.res}',
+            f'--up={args.up}']
 
 
 def main(argv=None):
