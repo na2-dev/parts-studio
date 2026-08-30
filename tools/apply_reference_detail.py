@@ -90,6 +90,15 @@ def main():
     if arg('fixviews', None) is not None:
         PD.assign_views = _fixed_assign
     mesh, converted = load_mesh_as_yup(src)
+
+    # ★パーツを扱うとき: 全身のメッシュを渡すと、正規化をそちらで行い、
+    #   全体の位置合わせを飛ばす。絵は【切らない全身のもの】をそのまま渡すこと。
+    full = arg('partof', None)
+    if full:
+        fm, _ = load_mesh_as_yup(full)
+        kw['norm_ref'] = np.asarray(fm.vertices, dtype=np.float64)
+        kw['fixfit'] = True
+        print(f'パーツとして扱います（全身: {full}）', flush=True)
     out = apply_detail(mesh, imgs, **kw)
     if converted:
         out.vertices = to_zup(np.asarray(out.vertices, dtype=np.float64))

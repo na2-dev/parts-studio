@@ -369,7 +369,14 @@ def fit_view(pv, mask, view, zsize):
 
 DEFAULTS = dict(mode='color', top=0.0, bottom=1.0, block=96, stride=24, search=40,
                 minncc=0.35, isize=2048, zsize=1280, minface=0.35, minshape=0.80,
-                feather=6, maxdiff=48.0, eps=0.02, bleed=8, dump=None)
+                feather=6, maxdiff=48.0, eps=0.02, bleed=8, dump=None,
+                # ★パーツ用（2026-08-30 追加）
+                #   normalize は既定でメッシュ自身の背の高さで正規化する。全身どうしなら
+                #   絵と対応するが、【パーツ単体では対応しない】。実測で体パーツは
+                #   シルエットの一致 0.29〜0.72 にしかならず1画素も貼れなかった。
+                #   norm_ref に【全身の頂点】を渡すと、そちらで正規化する。
+                #   fixfit=True で全体の位置合わせと一致の関門を飛ばす（既に合っているため）。
+                norm_ref=None, fixfit=False)
 
 
 def apply_detail(mesh, imgs, **kw):
@@ -419,10 +426,22 @@ def apply_detail(mesh, imgs, **kw):
     print(f'絵: {"・".join(imgs)} / 色を拾う大きさ {isize}px / 画面 {zsize}px',
           flush=True)
 
-    pts = normalize(np.asarray(mesh.vertices, dtype=np.float64))
+    norm_ref, fixfit = o['norm_ref'], o['fixfit']
+    if norm_ref is None:
+        _norm = normalize
+    else:
+        _ref = np.asarray(norm_ref, dtype=np.float64)
+        _lo, _hi = _ref.min(0), _ref.max(0)
+        _sc = (2.0 * (1.0 - 2 * S.BORDER)) / (_hi - _lo)[1]
+        _ctr = (_lo + _hi) / 2
+        def _norm(p):
+            return (np.asarray(p, dtype=np.float64) - _ctr) * _sc
+        print('  正規化は【全身】の大きさで行います（パーツ用）', flush=True)
+
+    pts = _norm(np.asarray(mesh.vertices, dtype=np.float64))
     fn = np.asarray(mesh.face_normals, dtype=np.float64)
     vn = np.asarray(mesh.vertex_normals, dtype=np.float64)
-    pv = normalize(np.asarray(
+    pv = _norm(np.asarray(
         trimesh.sample.sample_surface(mesh, 400_000, seed=1234)[0], dtype=np.float64))
 
     # ---- どの絵をどの向きに使うかを、測って決める
@@ -440,9 +459,13 @@ def apply_detail(mesh, imgs, **kw):
     for view in [v for v in S.VIEWS if v in assign]:
         key = assign[view][0]                   # この向きに使う絵（名前と違うことがある）
         print(f'---- {view}（{int(S.ANGLE[view])}°・{key} の絵）', flush=True)
-        iou0, fit_iou, gdx, gdy, gsc = fit_view(pv, masks[key], view, zsize)
-        print(f'  全体の位置合わせ: ずらし({gdx:+.3f},{gdy:+.3f}) 拡大{gsc:.2f} → '
-              f'一致 {iou0:.3f} → {fit_iou:.3f}', flush=True)
+        if fixfit:
+            iou0 = fit_iou = 1.0; gdx = gdy = 0.0; gsc = 1.0
+            print('  全体の位置合わせ: 飛ばします（全身の正規化で既に合っている）', flush=True)
+        else:
+            iou0, fit_iou, gdx, gdy, gsc = fit_view(pv, masks[key], view, zsize)
+            print(f'  全体の位置合わせ: ずらし({gdx:+.3f},{gdy:+.3f}) 拡大{gsc:.2f} → '
+                  f'一致 {iou0:.3f} → {fit_iou:.3f}', flush=True)
         # ★形と絵が合っていない向きは【丸ごと使いません】。
         #   合っていないまま貼ると、模様が別の場所に載ります。
         if fit_iou < minshape:
