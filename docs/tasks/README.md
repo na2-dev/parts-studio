@@ -32,7 +32,7 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 | A-3 | — | ~~リトポロジーを 1 コマンドにする~~ | ADR-0007 | ✅ | — |
 | A-4 | [#3](https://github.com/na2-dev/parts-studio/issues/3) | 塗り工程を parts-studio から呼べるようにする | ADR-0008 | 🔵 | A-1 |
 | A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | 🔵 | A-4 |
-| A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | ⏸ | A-2〜A-5 |
+| A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | 🔵 | A-2〜A-5 |
 | A-7 | [#6](https://github.com/na2-dev/parts-studio/issues/6) | 別の題材で通して、過適合を確かめる | — | ⏸ | A-6 |
 
 **A-3 は完了済み**: `experiments/remesh_blender.py` は QuadriFlow が通らず使えなかったが、
@@ -53,6 +53,11 @@ A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreem
 どれもエラーを出さず、出来上がりが静かに悪くなるだけだった
 （[実測](../measurements/2026-08-31-up-axis.md)）。とくに**色塗りは Y 上のメッシュを
 前提にしており、Z 上のまま渡すと顔が頭の裏側に付く**。
+
+**A-6 の結果（2026-08-31）**: `tools/run_pipeline.py` で 4 枚 → 完成 glb が
+**約 320 秒**で通った（[実測](../measurements/2026-08-31-run-pipeline.md)）。
+`--from` で途中から始められる。**リトポロジーは成功しても終了コードが 0 にならない**
+（bpy が終了時に落ちる）ので、出力が新しくなったかで判定している。
 
 **A-7 の注意**: 「首の高さの自動検出」「ならし 8 回」「首から上へ足す余白 `--margin` 0.01」などは、
 すべて 1 体だけで調整した値。別の絵で通らない可能性がある。
