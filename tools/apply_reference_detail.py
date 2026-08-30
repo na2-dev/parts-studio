@@ -22,8 +22,27 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import project_detail as PD                                # noqa: E402
 from project_detail import apply_detail, DEFAULTS          # noqa: E402
 from project_texture import arg                            # noqa: E402
+
+# ★視点の対応づけを固定する（--fixviews）
+#   project_detail はシルエット IoU で絵とモデルの向きを自動対応づけする。
+#   全身なら確実だが、【頭パーツはほぼ球形なので誤る】。実際に頭で走らせたら
+#   「back（180°）← front の絵」となり、正面の顔を後頭部に貼ろうとした。
+#   全身で測ったときの対応づけをそのまま使う。
+FIXED = {'front': 'front', 'right': 'left', 'back': 'back', 'left': 'right'}
+
+
+def _fixed_assign(pv, masks, zsize):
+    out = {}
+    for v, k in FIXED.items():
+        if k in masks:
+            out[v] = (k, 1.0)
+    print('絵の割り当て（固定しました）:', flush=True)
+    for v, (k, _) in out.items():
+        print(f'  {v:5s} ← {k:5s} の絵', flush=True)
+    return out
 
 
 def to_yup(v):
@@ -68,6 +87,8 @@ def main():
     if 'front' not in imgs:
         sys.exit('--front=正面.png は必須です')
 
+    if arg('fixviews', None) is not None:
+        PD.assign_views = _fixed_assign
     mesh, converted = load_mesh_as_yup(src)
     out = apply_detail(mesh, imgs, **kw)
     if converted:
