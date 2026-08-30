@@ -826,3 +826,97 @@ def test_閉じたメッシュには切り口が無い():
     trimesh = pytest.importorskip('trimesh')
     import smooth_part
     assert len(smooth_part.boundary_vertices(trimesh.creation.box())) == 0
+
+
+# ---- split_parts の中身 ---------------------------------------------------
+
+def make_figure():
+    """首がくびれた人型もどきを作る（体の箱＋細い首＋頭の球）。Z 上。"""
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    body = trimesh.creation.box(extents=(0.4, 0.3, 0.5))
+    body.apply_translation((0, 0, 0.25))
+    neck = trimesh.creation.cylinder(radius=0.05, height=0.12, sections=32)
+    neck.apply_translation((0, 0, 0.56))
+    head = trimesh.creation.icosphere(subdivisions=3, radius=0.2)
+    head.apply_translation((0, 0, 0.8))
+    return trimesh.util.concatenate([body, neck, head])
+
+
+def test_首はくびれた所に見つかる():
+    np = pytest.importorskip('numpy')
+    import split_parts
+    v = np.asarray(make_figure().vertices, dtype=np.float64)
+    neck, w = split_parts.find_neck(v)
+    assert 0.50 < neck < 0.63, f'首が {neck:.3f} に出た'
+    assert w < 0.2                       # くびれているので断面が小さい
+
+
+def test_首が見つからなければ止まる():
+    # ★黙って高さ45%を返すと、胴の真ん中で切った「頭」ができる
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import split_parts
+    v = np.asarray(trimesh.creation.box().vertices, dtype=np.float64)   # 8頂点
+    with pytest.raises(SystemExit) as e:
+        split_parts.find_neck(v)
+    assert '首が見つかりません' in str(e.value)
+
+
+def test_切ると頭と体に分かれる(tmp_path):
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import split_parts
+    src = tmp_path / 'a.glb'
+    make_figure().export(str(src))
+    h, b = tmp_path / 'h.glb', tmp_path / 'b.glb'
+    split_parts.split(str(src), str(h), str(b), 0.01, 'z')
+    hv = np.asarray(trimesh.load(str(h), force='mesh').vertices, float)
+    bv = np.asarray(trimesh.load(str(b), force='mesh').vertices, float)
+    assert hv[:, 2].mean() > bv[:, 2].mean(), '頭のほうが上にあるはず'
+    assert len(hv) > 10 and len(bv) > 10
+
+
+def test_上方向の指定に従う(tmp_path):
+    # ★無視して測ると、腕を広げた題材で横方向に切ってしまう
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import split_parts
+    src = tmp_path / 'a.glb'
+    make_figure().export(str(src))
+    got = {}
+    for up in ('z', 'y'):
+        h, b = tmp_path / f'h_{up}.glb', tmp_path / f'b_{up}.glb'
+        try:
+            split_parts.split(str(src), str(h), str(b), 0.01, up)
+            got[up] = len(np.asarray(trimesh.load(str(h), force='mesh').vertices))
+        except SystemExit:
+            got[up] = 'エラー'
+    # ★z と y で結果が変わる＝指定が効いている
+    assert got['z'] != got['y'], f'上方向の指定が効いていない: {got}'
+
+
+def test_切った結果がほぼ空なら止まる(tmp_path):
+    # ★空のまま進むと 47 秒かけて空を塗る
+    trimesh = pytest.importorskip('trimesh')
+    import split_parts
+    src = tmp_path / 'a.glb'
+    make_figure().export(str(src))
+    with pytest.raises(SystemExit) as e:
+        split_parts.split(str(src), str(tmp_path / 'h.glb'),
+                          str(tmp_path / 'b.glb'), 0.45, 'z')
+    assert '面が少なすぎます' in str(e.value)
+
+
+@pytest.mark.parametrize('bad', ['w', 'Z', '', 'up'])
+def test_切る工程は知らない上方向を拒む(tmp_path, bad):
+    # ★x は許す（横に寝た題材があり得る）。大文字や空文字は拒む
+    import split_parts
+    with pytest.raises(SystemExit):
+        split_parts.split('a.glb', 'h.glb', 'b.glb', 0.01, bad)
+
+
+def test_切る工程はおかしなmarginを拒む(tmp_path):
+    import split_parts
+    with pytest.raises(SystemExit):
+        split_parts.split('a.glb', 'h.glb', 'b.glb', 0.9, 'z')
