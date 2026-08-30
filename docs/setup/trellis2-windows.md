@@ -118,7 +118,13 @@ else:
     output = self.rembg_model(input)    # ここでだけ RMBG-2.0 が要る
 ```
 
-したがって**透過 PNG を渡す限り RMBG-2.0 は一度も読まれない**。背景ぬきは自前の工程として持ち、
+したがって**透過 PNG を渡す限り RMBG-2.0 は一度も読まれない**。
+
+> **★ただし「読まれない」だけで「構築されない」わけではない。**
+> `from_pretrained` の時点で rembg モデルを**構築してしまう**ため、gated な
+> `briaai/RMBG-2.0` を取りに行って 401 で落ちる。
+> `tools/patches.py` が構築だけをダミーに差し替えている。**自分でパイプラインを
+> 組むときは同じ手当てが要る。**背景ぬきは自前の工程として持ち、
 重みは `ZhengPeng7/BiRefNet`（**MIT**・gated なし・匿名取得可）を使う。TRELLIS.2 の rembg 実装
 ファイル名が `BiRefNet.py` であることからも分かるとおり、RMBG-2.0 は BiRefNet の重み違いである。
 
@@ -158,6 +164,29 @@ $env:PYTHONIOENCODING = "utf-8"
 ..\venv\Scripts\python.exe -c "from trellis2.pipelines import Trellis2ImageTo3DPipeline; print('OK')"
 ```
 
+## 形を作ってみる
+
+環境が組めたら、これが最初に叩くコマンド。
+
+```powershell
+cd C:\work\parts-studio
+$env:PYTHONUTF8 = "1"
+.\venv\Scripts\python.exe tools\make_shape.py `
+  --front=testimg\front.png --left=testimg\left.png `
+  --right=testimg\right.png --back=testimg\back.png `
+  --out=out\shape.glb
+```
+
+`ATTN_BACKEND` はスクリプトが未設定時に自動で `xformers` を入れる。
+テクスチャは作らない（[ADR-0008](../adr/0008-texture-by-hunyuan3d-paint.md) で
+Hunyuan3D-Paint に任せると決めたため）。
+
+テストは GPU 不要:
+
+```powershell
+.\venv\Scripts\python.exe -m pytest tests -q
+```
+
 期待される出力:
 
 ```
@@ -170,8 +199,8 @@ OK
 
 ## 現状
 
-- 1〜5: 完了。`trellis2` の両パイプラインが import できるところまで確認済み
-- 6: `microsoft/TRELLIS.2-4B`（15.12GB・22ファイル）取得済み。**`facebook/dinov3-vitl16` は承認待ち（403）**
+- 1〜6: 完了。**DINOv3 の承認も下りている**（2026-08-30）
+- `tools/make_shape.py` で 4 枚の絵から形を作れる（実測 163 秒・VRAM 4.89GB）
 - DINOv2-large を代役にした実測で、`1024_cascade` が 46 秒 / VRAM 2.9GB / RAM 22.2GB で通ることを確認済み（[実測](../measurements/2026-08-30-trellis2-memory.md)）。**形の品質は DINOv3 の承認後にやり直す**
 
 ## ハマったところ

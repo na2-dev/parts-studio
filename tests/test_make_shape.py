@@ -48,11 +48,21 @@ def test_絵が存在しないと止まる(tmp_path, imgs):
 
 def test_既定は実際に通しで検証した方式(imgs):
     # ★ADR-0005 は concat を既定としたが、通しで検証したのは multidiffusion。
-    #   根拠が変わった経緯は ADR-0005 の追記を参照
+    #   根拠が変わった経緯は ADR-0005 冒頭の「訂正あり（2026-08-31）」を参照
     a = make_shape.parse_args(['--front', imgs['front'], '--out', 'o.glb'])
     assert a.mode == 'multidiffusion'
     assert a.res == 1024
     assert a.seed == 1234
+
+
+def test_方式の一覧はmvcondを正とする(imgs):
+    # ★二重定義すると --help の並びと ADR の記述がずれる
+    import mvcond
+    a = make_shape.parse_args(['--front', imgs['front'], '--out', 'o.glb'])
+    assert a.mode in mvcond.MODES
+    for m in mvcond.MODES:
+        assert make_shape.parse_args(
+            ['--front', imgs['front'], '--out', 'o.glb', '--mode', m]).mode == m
 
 
 def test_知らない方式は拒む(imgs):

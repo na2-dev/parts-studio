@@ -13,12 +13,13 @@ Job は 4 View すべてが揃ってはじめて成立する。
 _Avoid_: アングル、視点、カメラ、面
 
 **Reference View（基準の向き）**:
-形づくりの条件として実際にモデルへ渡す View。現在は front のみ。
+形づくりの条件として実際にモデルへ渡す View。**4 View すべてが Reference View**
+（[ADR-0005](docs/adr/0005-multiview-conditioning-by-token-concat.md) で実装した）。
 _Avoid_: 入力画像、条件画像、プロンプト画像
 
 **Check View（検算の向き）**:
 条件には使わず、出来上がった Part を同じ向きから撮って絵と見比べるために使う View。
-現在は left / right / back の 3 つ。ここが合わないことは、形が絵から外れた証拠になる。
+**現在は無い**（4 View すべてを条件に使っているため）。検算は元の絵との並べ撮りで行う。
 _Avoid_: 参考画像、検証画像、テスト画像
 
 **Shape（形）**:

@@ -4,6 +4,10 @@
 #   上流は特定バージョンの transformers と、gated な重みを前提にしている。
 #   こちらの環境では2箇所で動かないので、import 後に差し替える。
 #   上流を書き換えると更新のたびに当て直しになるため、こちらで吸収する。
+#
+#   どちらも場当たりの回避ではなく、実測で裏を取った判断:
+#     ../docs/measurements/2026-08-30-trellis2-first-real-run.md（踏んだ経緯と数値）
+#     ../docs/setup/trellis2-windows.md（ハマりどころ）
 import sys
 
 
@@ -16,6 +20,7 @@ def _fix_dinov3():
       同じもの（最終層の出力・norm 前）を取る。
       hidden_states[-1] が norm 前であることは実測で確認済み
       （last_hidden_state との差の最大が 153459 と大きく、別物）。
+      → ../docs/measurements/2026-08-30-trellis2-first-real-run.md
     """
     import torch.nn.functional as F
     from trellis2.modules import image_feature_extractor as ife
@@ -39,6 +44,7 @@ def _skip_rembg():
       ところが from_pretrained の時点で【モデルを構築してしまう】ため、
       gated な briaai/RMBG-2.0 を取りに行って 401 で落ちる。
       構築だけ避ける。呼ばれたら明示的に落として、前提の破れに気づけるようにする。
+      → ../docs/setup/trellis2-windows.md の「RMBG-2.0 を不要にする」
     """
     from trellis2.pipelines import rembg
 

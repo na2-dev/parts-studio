@@ -7,7 +7,9 @@
 # ★前提
 #   Windows 機の venv（Python 3.11・torch 2.7.0+cu128）で動かす。
 #   環境の作り方は docs/setup/trellis2-windows.md。
-#   実行時に ATTN_BACKEND=xformers が要る（sdpa は sparse 側が受け付けない）。
+#   ATTN_BACKEND は未設定なら xformers を自動で入れる。
+#   ★sdpa は選ばないこと。dense 側は受け付けるが sparse 側が受け付けず、
+#     既定の flash_attn のまま残って import に失敗する。
 #
 # ★4枚の渡し方
 #   TRELLIS.2 の run() は絵を1枚しか受け取らない。tools/mvcond.py で
@@ -22,8 +24,21 @@ import os
 import sys
 import time
 
-MODES = ('multidiffusion', 'concat', 'stochastic', 'single')
 VIEWS = ('front', 'left', 'right', 'back')
+DEFAULT_MODE = 'multidiffusion'
+
+
+def _modes():
+    """方式の一覧は mvcond を正とする（二重定義を避ける）。
+
+    ★argparse を作る時点では TRELLIS.2 の sys.path が通っていないが、
+      mvcond は torch を import しないので単体で読める。
+    """
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    import mvcond
+    return mvcond.MODES
 
 
 def parse_args(argv=None):
@@ -35,8 +50,9 @@ def parse_args(argv=None):
                        help=f'{v} の絵（背景ぬき済みの透過PNG）')
     p.add_argument('--out', required=True, help='出力する形の glb')
     p.add_argument('--res', type=int, default=1024,
-                   help='形の解像度。1024 か 1536（1536 は細部が出るが遅い）')
-    p.add_argument('--mode', choices=MODES, default='multidiffusion',
+                   help='形の解像度。512 以上なら通るが、実測があるのは 1024 と 1536'
+                        '（1536 は細部が出るが遅い）')
+    p.add_argument('--mode', choices=_modes(), default=DEFAULT_MODE,
                    help='4枚の渡し方')
     p.add_argument('--seed', type=int, default=1234, help='乱数の種')
     p.add_argument('--repo', default=None,
@@ -115,6 +131,9 @@ def main(argv=None):
         torch.manual_seed(args.seed)
         n = len(imgs)
 
+        # ★prepare_cond と inject は必ず対で使う。
+        #   prepare_cond を飛ばすと neg_cond の batch が View 数のまま残り、
+        #   CFG が x_t（batch 1）と噛み合わずに落ちる。
         c512 = mvcond.prepare_cond(pipe.get_cond(imgs, 512), args.mode)
         c1024 = mvcond.prepare_cond(pipe.get_cond(imgs, 1024), args.mode)
 
