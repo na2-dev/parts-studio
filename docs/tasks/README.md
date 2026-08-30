@@ -28,7 +28,7 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 | ID | Issue | タスク | 由来 | 状態 | 前提 |
 |---|---|---|---|---|---|
 | A-1 | [PR #1](https://github.com/na2-dev/parts-studio/pull/1) | 作業の進め方とタスク一覧を用意する | — | 🔵 | — |
-| A-2 | [#2](https://github.com/na2-dev/parts-studio/issues/2) | 形づくりを 1 コマンドにする（4枚 → 形の glb） | ADR-0003/0005 | 🔵 | A-1 |
+| A-2 | [#2](https://github.com/na2-dev/parts-studio/issues/2) | ~~形づくりを 1 コマンドにする（4枚 → 形の glb）~~ | ADR-0003/0005 | ✅ | — |
 | A-3 | — | ~~リトポロジーを 1 コマンドにする~~ | ADR-0007 | ✅ | — |
 | A-4 | [#3](https://github.com/na2-dev/parts-studio/issues/3) | 塗り工程を parts-studio から呼べるようにする | ADR-0008 | 🔵 | A-1 |
 | A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | 🔵 | A-4 |

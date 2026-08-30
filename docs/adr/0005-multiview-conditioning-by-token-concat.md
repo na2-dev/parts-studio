@@ -1,5 +1,18 @@
 # 4枚の絵は、DINOv3 特徴をトークン方向に連結して条件に渡す
 
+> **訂正あり（2026-08-31）**: **実装の既定は `multidiffusion` にした。**
+> この ADR が `concat` を選んだ理由は「multidiffusion だと正面のテクスチャの細部が薄まる」
+> ことだったが、[ADR-0008](0008-texture-by-hunyuan3d-paint.md) でテクスチャを
+> Hunyuan3D-Paint に任せる方式へ移ったため、**その理由はもう成り立たない**。
+> いま効くのは形の質だけである。
+>
+> かつ、通しのパイプラインで実際に使い実測で裏が取れているのは `multidiffusion` のほう
+> （[実測](../measurements/2026-08-30-shape-texture-separation.md)・
+> [通しの手順](../measurements/2026-08-30-final-pipeline.md)）。`concat` を選んだ判断は
+> **テクスチャ込みの単体比較**にもとづくもので、いまの本線では検証していない。
+>
+> **形だけを比べ直すのは未着手**（`tools/make_shape.py --mode` で切り替えられる）。
+
 ADR-0003 で「多視点の条件付けは後段の課題」として先送りしたが、
 [初回実行](../measurements/2026-08-30-trellis2-first-real-run.md)で、正面 1 枚だけでは
 後ろが元の絵から大きく外れる（フードがオレンジ→肌色、背中の鍵穴と縫い目が消失）ことが

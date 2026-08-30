@@ -26,7 +26,7 @@ parts-studio/
 │   ├── setup/          環境構築とこの文書
 │   └── tasks/          タスクの索引（正は GitHub Issues）
 ├── tools/              ★本線で使う道具だけを置く
-├── tests/              tools/ のテスト（GPU 無しで通るもの）
+├── tests/              道具のテスト（GPU 不要・pytest）
 ├── patches/            上流に当てるパッチ
 ├── experiments/        本線で使っていないもの。動作を保証しない
 │

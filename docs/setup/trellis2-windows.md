@@ -89,8 +89,8 @@ $env:ATTN_BACKEND = "xformers"
 （`pillow` は torch が入れる）。
 
 ```powershell
-.\venv\Scripts\pip.exe install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja `
-  trimesh transformers "gradio==6.0.1" tensorboard pandas lpips zstandard kornia timm safetensors huggingface_hub
+.\venv\Scripts\pip.exe install imageio imageio-ffmpeg tqdm easydict "opencv-python-headless<5" ninja `
+  trimesh "transformers==5.16.1" "gradio==6.0.1" tensorboard pandas lpips zstandard kornia timm safetensors huggingface_hub
 .\venv\Scripts\pip.exe install "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
 ```
 
@@ -118,7 +118,13 @@ else:
     output = self.rembg_model(input)    # ここでだけ RMBG-2.0 が要る
 ```
 
-したがって**透過 PNG を渡す限り RMBG-2.0 は一度も読まれない**。背景ぬきは自前の工程として持ち、
+したがって**透過 PNG を渡す限り RMBG-2.0 は一度も読まれない**。
+
+> **★ただし「読まれない」だけで「構築されない」わけではない。**
+> `from_pretrained` の時点で rembg モデルを**構築してしまう**ため、gated な
+> `briaai/RMBG-2.0` を取りに行って 401 で落ちる。
+> `tools/patches.py` が構築だけをダミーに差し替えている。**自分でパイプラインを
+> 組むときは同じ手当てが要る。**背景ぬきは自前の工程として持ち、
 重みは `ZhengPeng7/BiRefNet`（**MIT**・gated なし・匿名取得可）を使う。TRELLIS.2 の rembg 実装
 ファイル名が `BiRefNet.py` であることからも分かるとおり、RMBG-2.0 は BiRefNet の重み違いである。
 
@@ -158,6 +164,29 @@ $env:PYTHONIOENCODING = "utf-8"
 ..\venv\Scripts\python.exe -c "from trellis2.pipelines import Trellis2ImageTo3DPipeline; print('OK')"
 ```
 
+## 形を作ってみる
+
+環境が組めたら、これが最初に叩くコマンド。
+
+```powershell
+cd C:\work\parts-studio
+$env:PYTHONUTF8 = "1"
+.\venv\Scripts\python.exe tools\make_shape.py `
+  --front=testimg\front.png --left=testimg\left.png `
+  --right=testimg\right.png --back=testimg\back.png `
+  --out=out\shape.glb
+```
+
+`ATTN_BACKEND` はスクリプトが未設定時に自動で `xformers` を入れる。
+テクスチャは作らない（[ADR-0008](../adr/0008-texture-by-hunyuan3d-paint.md) で
+Hunyuan3D-Paint に任せると決めたため）。
+
+テストは GPU 不要:
+
+```powershell
+.\venv\Scripts\python.exe -m pytest tests -q
+```
+
 期待される出力:
 
 ```
@@ -170,8 +199,8 @@ OK
 
 ## 現状
 
-- 1〜5: 完了。`trellis2` の両パイプラインが import できるところまで確認済み
-- 6: `microsoft/TRELLIS.2-4B`（15.12GB・22ファイル）取得済み。**`facebook/dinov3-vitl16` は承認待ち（403）**
+- 1〜6: 完了。**DINOv3 の承認も下りている**（2026-08-30）
+- `tools/make_shape.py` で 4 枚の絵から形を作れる（実測 163 秒・VRAM 4.89GB）
 - DINOv2-large を代役にした実測で、`1024_cascade` が 46 秒 / VRAM 2.9GB / RAM 22.2GB で通ることを確認済み（[実測](../measurements/2026-08-30-trellis2-memory.md)）。**形の品質は DINOv3 の承認後にやり直す**
 
 ## ハマったところ
@@ -183,4 +212,6 @@ OK
 | SSH 越しの日本語が化ける | `windows-ssh.md` の手順8（UTF-8 プロファイル）。Python の出力は別途 `$env:PYTHONIOENCODING="utf-8"` |
 | `ssh gpu 'python -c "..."'` が構文エラー | 引用符が bash と PowerShell の二重解釈で壊れる。スクリプトを `scp` してから実行する |
 | `cv2.error: !_src.empty()` で HDRI(.exr) が読めない | `opencv-python-headless` 5.0.0 は EXR 非対応。`pip install "opencv-python-headless<5"` で 4.x に下げ、`$env:OPENCV_IO_ENABLE_OPENEXR="1"` を設定する |
+| （固定の理由）`transformers==5.16.1` | `tools/patches.py` の DINOv3 差し替えが「`hidden_states[-1]` は最終層の norm 前」という 5.16.1 の実測に依存している。別バージョンで post-norm に変わっても**例外は出ず、形の質だけが静かに落ちる**ので固定する |
+| （固定の理由）`opencv-python-headless<5` | 5.0.0 が EXR 対応を落としたため。下の行も参照 |
 | `'DINOv3ViTModel' object has no attribute 'layer'` | transformers 5.16.1 で層が `model.model.layer` へ移った。上流の `extract_features` は `self.model.layer` を直接舐めている。`output_hidden_states=True` の `hidden_states[-1]` に置き換えれば内部属性に依存せず同じものが取れる |
