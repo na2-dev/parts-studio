@@ -58,6 +58,11 @@
 
 ## 道具
 
+> **★2026-08-31 追記**: このうち `bake_to_uv.py` と `crop_ref_for_part.py` は
+> [`experiments/`](../../experiments/README.md) へ移した（本線で使っていないため）。
+> 下の表のパスは当時のもの。**そのまま実行するとファイルが無い。**
+
+
 | | |
 |---|---|
 | `tools/retopo_shrinkwrap.py` | ボクセル化 → 元表面へスナップ |

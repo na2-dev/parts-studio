@@ -24,8 +24,9 @@ ADR-0002 で「UV展開を独立工程にし、xatlas で自前に行う」と�
 `cumesh.uv_unwrap` のままでよい（xatlas より良い数字が出ている）。並べ直したあとで両者を測り直し、
 そこで初めて選ぶ。
 
-3d-studio が同じ壁に 2026-08-16 に当たっており、Blender による並べ直し（`tools/remesh_blender.py`）
-と、低ポリ化＋法線マップ焼き戻し（`tools/retopo_bake_blender.py`）を持っている。**移植する。**
+3d-studio が同じ壁に 2026-08-16 に当たっており、Blender による並べ直し
+（**3d-studio の** `tools/remesh_blender.py`）と、低ポリ化＋法線マップ焼き戻し
+（**3d-studio の** `tools/retopo_bake_blender.py`）を持っている。**移植する。**
 そこに記録されている順番の制約も引き継ぐ。
 
 - 並べ直しは**色塗りのあと**（前にやると効かない。実測で 59,999 → 59,999 と無反応）

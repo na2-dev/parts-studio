@@ -2,20 +2,21 @@
 /TRELLIS.2/
 /_wheels/
 
-# Python
+# Python の環境
 /venv/
+/venv-bpy/
 __pycache__/
 *.py[cod]
 *.egg-info/
 
 # 実行時の生成物
-/output/
+/out/
+/scratch/
 *.glb
 *.ply
+*.log
 
-# 手元だけの検証スクリプト
-/smoke_*.py
-/hfcheck*.py
-/dl_weights.py
+# 入力の絵（題材ごとに置き換わるのでリポジトリには入れない）
+/testimg*/
 
 .DS_Store

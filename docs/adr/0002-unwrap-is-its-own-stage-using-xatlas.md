@@ -2,6 +2,16 @@
 
 > **訂正あり（2026-08-30）**: xatlas を既定にする部分は実測で覆った。展開器より前に
 > リトポロジーが要る。[ADR-0007](0007-retopology-before-uv.md) を参照。
+>
+> **さらに訂正（2026-08-31）**: この ADR が「却下」とした
+> **「色塗りAIに任せる（上流のまま）」が、いまの本線になっている。**
+> [ADR-0008](0008-texture-by-hunyuan3d-paint.md) で Hunyuan3D-Paint に塗らせる方式へ
+> 移った結果、UV は色塗りAI が張っている。自前の UV 工程（`bake_to_uv.py`）は
+> [`experiments/`](../../experiments/README.md) へ隔離した。
+>
+> **ただし CONTEXT.md の「Unwrapped Shape は第一級の保存物」は残したままである。**
+> 本線に UV 工程が無い以上これは実態と合っていない。
+> どちらへ寄せるかは未決（[#3](https://github.com/na2-dev/parts-studio/issues/3) で扱う）。
 
 Hunyuan3D 系の色塗りは内部で UV 展開まで行うため、上流のままだと同じ Shape に塗り直すたびに
 Layout が変わり、Texture どうしに互換性が無い。Texture の作り直しと差し替えを中心に据えたいので、

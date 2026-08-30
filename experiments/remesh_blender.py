@@ -8,11 +8,11 @@
 #   おまけに、面が少ないほど1面あたりに使える色の絵が広くなるので、
 #   色塗りも細かくなります。
 #
-# 3d-studio (tools/remesh_blender.py) からそのまま移植した。実測にもとづく注意書きも
+# 3d-studio (experiments/remesh_blender.py) からそのまま移植した。実測にもとづく注意書きも
 # 当時のまま残してある。ADR-0007 の「UV展開の前にリトポロジーを入れる」の実体。
 #
-# 使いかた: venv-bpy\Scripts\python.exe tools\remesh_blender.py 入力.glb 出力.glb [目標の三角形数]
-#           venv-bpy\Scripts\python.exe tools\remesh_blender.py 入力.glb 出力.glb 20000
+# 使いかた: venv-bpy\Scripts\python.exe experiments\remesh_blender.py 入力.glb 出力.glb [目標の三角形数]
+#           venv-bpy\Scripts\python.exe experiments\remesh_blender.py 入力.glb 出力.glb 20000
 import sys
 
 import bpy
