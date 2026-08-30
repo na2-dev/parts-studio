@@ -31,7 +31,7 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 | A-2 | [#2](https://github.com/na2-dev/parts-studio/issues/2) | 形づくりを 1 コマンドにする（4枚 → 形の glb） | ADR-0003/0005 | 🔵 | A-1 |
 | A-3 | — | ~~リトポロジーを 1 コマンドにする~~ | ADR-0007 | ✅ | — |
 | A-4 | [#3](https://github.com/na2-dev/parts-studio/issues/3) | 塗り工程を parts-studio から呼べるようにする | ADR-0008 | 🔵 | A-1 |
-| A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | ⏸ | A-4 |
+| A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | 🔵 | A-4 |
 | A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | ⏸ | A-2〜A-5 |
 | A-7 | [#6](https://github.com/na2-dev/parts-studio/issues/6) | 別の題材で通して、過適合を確かめる | — | ⏸ | A-6 |
 
@@ -44,6 +44,11 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 `Z:\work\3d-studio` から借りており、場所は `--paint-root` と環境変数
 `PARTS_STUDIO_PAINT_ROOT` で差し替えられる。借りていることは実行時に必ず表示する。
 自前で作る手順は [paint-environment.md](../setup/paint-environment.md)（**まだ通していない**）。
+
+**A-5 で分かったこと（2026-08-31）**: 上方向の扱いが 3 か所で間違っていた。
+どれもエラーを出さず、出来上がりが静かに悪くなるだけだった
+（[実測](../measurements/2026-08-31-up-axis.md)）。とくに**色塗りは Y 上のメッシュを
+前提にしており、Z 上のまま渡すと顔が頭の裏側に付く**。
 
 **A-7 の注意**: 「首の高さの自動検出」「ならし 8 回」「切る高さ 0.033」などは、
 すべて 1 体だけで調整した値。別の絵で通らない可能性がある。
