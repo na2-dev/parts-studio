@@ -13,10 +13,14 @@ import numpy as np
 import trimesh
 
 
-def main():
-    src, dst = sys.argv[1], sys.argv[2]
-    iters = int(sys.argv[3]) if len(sys.argv) > 3 else 8
-    lam = float(sys.argv[4]) if len(sys.argv) > 4 else 0.5
+ITERS, LAMBDA = 8, 0.5
+
+
+def smooth(src, dst, iters=ITERS, lam=LAMBDA):
+    """ならして保存し、動いた距離を返す。
+
+    ★体には掛けないこと。背中の鍵穴が消える（2026-08-30 実測）。
+    """
     m = trimesh.load(src, force='mesh', process=False)
     v0 = np.asarray(m.vertices, dtype=np.float64).copy()
     trimesh.smoothing.filter_laplacian(m, lamb=lam, iterations=iters,
@@ -29,6 +33,14 @@ def main():
           flush=True)
     m.export(dst)
     print('保存:', dst, flush=True)
+    return {'mean': float(d.mean()), 'max': float(d.max()), 'size': float(size)}
+
+
+def main():
+    src, dst = sys.argv[1], sys.argv[2]
+    iters = int(sys.argv[3]) if len(sys.argv) > 3 else ITERS
+    lam = float(sys.argv[4]) if len(sys.argv) > 4 else LAMBDA
+    smooth(src, dst, iters, lam)
 
 
 if __name__ == '__main__':

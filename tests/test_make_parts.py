@@ -1,0 +1,453 @@
+# tools/make_parts.py のテスト。GPU も torch も要らない。
+# 重い工程（切る・ならす・塗る・投影・結合）は差し替えて、【並びと渡す値】を見る。
+import os
+import sys
+
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import make_parts                                            # noqa: E402
+
+
+@pytest.fixture
+def imgs(tmp_path):
+    made = {}
+    for v in make_parts.VIEWS:
+        p = tmp_path / f'{v}.png'
+        p.write_bytes(b'\x89PNG\r\n\x1a\n')
+        made[v] = str(p)
+    return made
+
+
+def base_argv(tmp_path, imgs, **over):
+    shape = tmp_path / 'retopo.glb'
+    shape.write_text('x')
+    argv = ['--shape', str(shape), '--out', str(tmp_path / 'final.glb')]
+    for v, p in imgs.items():
+        argv += [f'--{v}', p]
+    for k, val in over.items():
+        argv += [f'--{k}', str(val)]
+    return argv
+
+
+# ---- パーツの定義（ここが仕様そのもの） -----------------------------------
+
+def test_パーツは頭と体の2つ():
+    assert [p['name'] for p in make_parts.PARTS] == ['head', 'body']
+
+
+def test_ならすのは頭だけ():
+    # ★体をならすと背中の鍵穴が消える（2026-08-30 実測）。
+    #   間違えても見た目が「少し滑らか」になるだけで、情報が落ちたと気づけない
+    smoothed = [p['name'] for p in make_parts.PARTS if p['smooth']]
+    assert smoothed == ['head']
+
+
+def test_視点の対応づけは固定する():
+    # ★座標の規約から決まる並びなので題材によらない。自動割り当ては
+    #   それを毎回引き直しているだけで、外すことがある（頭で実測）
+    assert make_parts.FIXVIEWS is True
+
+
+# ---- 引数 -----------------------------------------------------------------
+
+@pytest.mark.parametrize('out', ['x.obj', 'x.gltf', 'x'])
+def test_出力がglbでなければ拒む(tmp_path, imgs, out):
+    argv = base_argv(tmp_path, imgs)
+    argv[argv.index('--out') + 1] = str(tmp_path / out)      # ★--out だけ差し替える
+    with pytest.raises(SystemExit):
+        make_parts.parse_args(argv)
+
+
+def test_出力がglbなら通る(tmp_path, imgs):
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    assert a.out.endswith('final.glb')
+
+
+def test_正面が無ければ拒む(tmp_path, imgs):
+    with pytest.raises(SystemExit):
+        make_parts.parse_args(['--shape', 'a.glb', '--out', 'b.glb',
+                               '--left', imgs['left']])
+
+
+def test_ならしの強さは0から1(tmp_path, imgs):
+    for bad in ('-0.1', '1.5'):
+        with pytest.raises(SystemExit):
+            make_parts.parse_args(base_argv(tmp_path, imgs) +
+                                  ['--smooth-lambda', bad])
+
+
+def test_ならしの回数は0以上(tmp_path, imgs):
+    with pytest.raises(SystemExit):
+        make_parts.parse_args(base_argv(tmp_path, imgs) + ['--smooth-iters', '-1'])
+
+
+def test_既定値(tmp_path, imgs):
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    assert (a.texsize, a.margin, a.smooth_iters, a.smooth_lambda) == (4096, 0.01, 8, 0.5)
+
+
+def test_絵が無ければ止まる(tmp_path, imgs):
+    a = make_parts.parse_args(['--shape', 'a.glb', '--out', str(tmp_path / 'o.glb'),
+                               '--front', str(tmp_path / 'ない.png')])
+    with pytest.raises(SystemExit) as e:
+        make_parts.collect_images(a)
+    assert '見つかりません' in str(e.value)
+
+
+def test_4枚渡せば4枚集まる(tmp_path, imgs):
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    assert set(make_parts.collect_images(a)) == set(imgs)
+
+
+# ---- 途中のファイルの置き場所 ---------------------------------------------
+
+def test_workの既定は出力先のparts(tmp_path, imgs):
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    assert make_parts.work_dir(a) == os.path.join(str(tmp_path), 'parts')
+
+
+def test_workは指定できる(tmp_path, imgs):
+    a = make_parts.parse_args(base_argv(tmp_path, imgs) + ['--work', str(tmp_path / 'w')])
+    assert make_parts.work_dir(a) == str(tmp_path / 'w')
+
+
+def test_工程ごとに別の名前を使う(tmp_path):
+    # ★同じ名前を使い回すと、途中で落ちたときにどこまで進んだか分からなくなる
+    ps = make_parts.part_paths(str(tmp_path), 'head')
+    assert set(ps) == {'raw', 'shape', 'painted', 'final'}
+    assert len(set(ps.values())) == 4
+    assert all(v.endswith('.glb') for v in ps.values())
+    assert all(os.path.basename(v).startswith('head_') for v in ps.values())
+
+
+# ---- 通しの並びと渡す値 ---------------------------------------------------
+
+class Recorder:
+    """重い工程を差し替えて、呼ばれた順と引数を記録する。"""
+
+    def __init__(self, tmp_path, monkeypatch):
+        self.calls = []
+        self.tmp = tmp_path
+
+        def fake_split(shape, work, margin):
+            self.calls.append(('split', shape, margin))
+            paths = {p['name']: make_parts.part_paths(work, p['name'])
+                     for p in make_parts.PARTS}
+            for ps in paths.values():
+                open(ps['raw'], 'w').write('x')
+            return paths
+
+        def fake_prepare(part, paths, args):
+            self.calls.append(('prepare', part['name'], part['smooth'],
+                               args.smooth_iters, args.smooth_lambda))
+            open(paths['shape'], 'w').write('x')
+            return paths['shape']
+
+        def fake_paint(part, paths, args):
+            self.calls.append(('paint', part['name'], args.texsize))
+            open(paths['painted'], 'w').write('x')
+            return paths['painted']
+
+        def fake_project(part, paths, images, shape, up):
+            self.calls.append(('project', part['name'], up,
+                               shape, tuple(sorted(images))))
+            open(paths['final'], 'w').write('x')
+            return paths['final']
+
+        # ★偽の glb を渡すので、実際に読む工程は差し替える
+        monkeypatch.setattr(make_parts, 'detect_up', lambda shape: 'z')
+        monkeypatch.setattr(make_parts, 'split', fake_split)
+        monkeypatch.setattr(make_parts, 'prepare_shape', fake_prepare)
+        monkeypatch.setattr(make_parts, 'paint', fake_paint)
+        monkeypatch.setattr(make_parts, 'project', fake_project)
+
+        import combine_parts
+        self.combined = []
+
+        def fake_combine(dst, parts, up='z'):
+            self.combined.append((dst, list(parts), up))
+            open(dst, 'w').write('x')
+            return []
+
+        monkeypatch.setattr(combine_parts, 'combine', fake_combine)
+
+
+@pytest.fixture
+def rec(tmp_path, monkeypatch):
+    return Recorder(tmp_path, monkeypatch)
+
+
+def test_通しの並び(tmp_path, imgs, rec):
+    assert make_parts.main(base_argv(tmp_path, imgs)) == 0
+    order = [c[0] for c in rec.calls]
+    # ★切る → (形を作る) x2 → (塗る → 投影) x2
+    assert order == ['split', 'prepare', 'prepare',
+                     'paint', 'project', 'paint', 'project']
+
+
+def test_塗る前に形を作る(tmp_path, imgs, rec):
+    # ★ならす前に塗ると、彫られた細部を残したまま塗ってしまう
+    make_parts.main(base_argv(tmp_path, imgs))
+    order = [c[0] for c in rec.calls]
+    assert order.index('prepare') < order.index('paint')
+
+
+def test_投影は塗ったあと(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs))
+    for name in ('head', 'body'):
+        got = [i for i, c in enumerate(rec.calls) if len(c) > 1 and c[1] == name]
+        kinds = [rec.calls[i][0] for i in got]
+        assert kinds.index('paint') < kinds.index('project')
+
+
+def test_投影には切る前の全身を渡す(tmp_path, imgs, rec):
+    # ★これが無いとパーツ単体で正規化してしまい、1画素も貼れない（体 0% を実測）
+    make_parts.main(base_argv(tmp_path, imgs))
+    shape = os.path.abspath(str(tmp_path / 'retopo.glb'))
+    for c in rec.calls:
+        if c[0] == 'project':
+            assert c[3] == shape
+
+
+def test_投影には全身の絵を4枚とも渡す(tmp_path, imgs, rec):
+    # ★絵は切らない。切ると全身の正規化と噛み合わない
+    make_parts.main(base_argv(tmp_path, imgs))
+    for c in rec.calls:
+        if c[0] == 'project':
+            assert c[4] == tuple(sorted(make_parts.VIEWS))
+
+
+def test_全身の上方向を全パーツへ渡す(tmp_path, imgs, rec):
+    # ★パーツからは測れない（背が低く一番長い軸が横になる）。
+    #   ずれると絵とメッシュが対応せず、貼れる画素が激減する
+    #   （2026-08-31 実測: 頭 9.46% / 体 6.18% → 直して 37.37% / 33.49%）
+    make_parts.main(base_argv(tmp_path, imgs))
+    got = {c[1]: c[2] for c in rec.calls if c[0] == 'project'}
+    assert got == {'head': 'z', 'body': 'z'}
+
+
+def test_上方向は指定できる(tmp_path, imgs, rec, monkeypatch):
+    monkeypatch.setattr(make_parts, 'detect_up',
+                        lambda shape: pytest.fail('指定したのに測っている'))
+    make_parts.main(base_argv(tmp_path, imgs) + ['--up', 'y'])
+    got = {c[1]: c[2] for c in rec.calls if c[0] == 'project'}
+    assert got == {'head': 'y', 'body': 'y'}
+
+
+def test_上方向はパーツではなく全身から測る(tmp_path, imgs, rec, monkeypatch):
+    seen = []
+    monkeypatch.setattr(make_parts, 'detect_up', lambda shape: seen.append(shape) or 'z')
+    make_parts.main(base_argv(tmp_path, imgs))
+    assert seen == [os.path.abspath(str(tmp_path / 'retopo.glb'))]
+
+
+def test_知らない上方向は拒む(tmp_path, imgs):
+    with pytest.raises(SystemExit):
+        make_parts.parse_args(base_argv(tmp_path, imgs) + ['--up', 'x'])
+
+
+def test_頭だけならす指示が渡る(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs))
+    got = {c[1]: c[2] for c in rec.calls if c[0] == 'prepare'}
+    assert got == {'head': True, 'body': False}
+
+
+def test_texsizeがそのまま塗りへ渡る(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs, texsize=2048))
+    for c in rec.calls:
+        if c[0] == 'paint':
+            assert c[2] == 2048
+
+
+def test_結合には投影後のものを渡す(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs))
+    dst, parts, _ = rec.combined[0]
+    assert dst == str(tmp_path / 'final.glb')
+    assert [os.path.basename(p) for p in parts] == ['head_final.glb', 'body_final.glb']
+
+
+def test_投影を飛ばすと塗ったものを結合する(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs) + ['--skip-project'])
+    assert not any(c[0] == 'project' for c in rec.calls)
+    _, parts, _ = rec.combined[0]
+    assert [os.path.basename(p) for p in parts] == ['head_painted.glb', 'body_painted.glb']
+
+
+def test_形が無ければ何もせず止まる(tmp_path, imgs, rec):
+    argv = base_argv(tmp_path, imgs)
+    os.remove(str(tmp_path / 'retopo.glb'))
+    with pytest.raises(SystemExit) as e:
+        make_parts.main(argv)
+    assert '形が見つかりません' in str(e.value)
+    assert rec.calls == []
+
+
+def test_切った結果が無ければ止まる(tmp_path, imgs, monkeypatch):
+    # ★次の工程へ進む前に確かめる。進むと「塗る対象が無い」と別の所で落ちる
+    import split_parts
+    monkeypatch.setattr(split_parts, 'split', lambda *a, **k: None)
+    with pytest.raises(SystemExit) as e:
+        make_parts.split(str(tmp_path / 'a.glb'), str(tmp_path), 0.01)
+    assert 'head' in str(e.value) or 'body' in str(e.value)
+
+
+# ---- 上方向の判定（apply_reference_detail 側） -----------------------------
+
+def test_一番長い軸がZなら上はZ():
+    np = pytest.importorskip('numpy')
+    import apply_reference_detail as ARD
+    v = np.array([[0, 0, 0], [0.76, 0.43, 1.0]])          # 全身の実測に近い形
+    assert ARD.detect_up(v) == 'z'
+
+
+def test_一番長い軸が横なら上はYと判定してしまう():
+    # ★これが「パーツからは測れない」の中身。実測（2026-08-31）で
+    #   頭 X=0.488 Y=0.433 Z=0.470、体 X=0.758 Y=0.287 Z=0.536。
+    #   どちらも Z 上なのに X が一番長く、Y 上と判定される
+    np = pytest.importorskip('numpy')
+    import apply_reference_detail as ARD
+    assert ARD.detect_up(np.array([[0, 0, 0], [0.488, 0.433, 0.470]])) == 'y'
+    assert ARD.detect_up(np.array([[0, 0, 0], [0.758, 0.287, 0.536]])) == 'y'
+
+
+def test_上方向を指定すれば測らない(tmp_path, monkeypatch):
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import apply_reference_detail as ARD
+    m = trimesh.creation.box(extents=(0.758, 0.287, 0.536))
+    p = tmp_path / 'part.glb'
+    m.export(str(p))
+    monkeypatch.setattr(ARD, 'detect_up',
+                        lambda v: pytest.fail('指定したのに測っている'))
+    _, converted = ARD.load_mesh_as_yup(str(p), up='z')
+    assert converted is True                               # Z上 -> Y上に変換した
+
+
+def test_知らない上方向は拒む_projection(tmp_path):
+    trimesh = pytest.importorskip('trimesh')
+    import apply_reference_detail as ARD
+    p = tmp_path / 'part.glb'
+    trimesh.creation.box().export(str(p))
+    with pytest.raises(SystemExit):
+        ARD.load_mesh_as_yup(str(p), up='x')
+
+
+# ---- 出来上がりの向き（glTF は Y が上と決まっている） ---------------------
+
+def test_結合で上方向を渡す(tmp_path, imgs, rec, monkeypatch):
+    # ★直さないと、出来た glb は標準のビューアで寝たまま表示される
+    import combine_parts
+    seen = []
+    monkeypatch.setattr(combine_parts, 'combine',
+                        lambda dst, parts, up='z': seen.append(up) or
+                        open(dst, 'w').write('x'))
+    make_parts.main(base_argv(tmp_path, imgs))
+    assert seen == ['z']
+
+
+def test_Z上はY上へ直す():
+    np = pytest.importorskip('numpy')
+    import combine_parts
+    m = np.array(combine_parts.UP_TO_GLTF['z'], dtype=np.float64)
+    # (x, y, z) -> (x, z, -y)
+    got = m @ np.array([1.0, 2.0, 3.0, 1.0])
+    assert list(got[:3]) == [1.0, 3.0, -2.0]
+
+
+def test_Y上はそのまま():
+    import combine_parts
+    assert combine_parts.UP_TO_GLTF['y'] is None
+
+
+def test_結合は知らない上方向を拒む(tmp_path):
+    import combine_parts
+    with pytest.raises(SystemExit):
+        combine_parts.combine(str(tmp_path / 'o.glb'), ['a.glb'], up='x')
+
+
+def test_結合はパーツが無ければ拒む(tmp_path):
+    import combine_parts
+    with pytest.raises(SystemExit):
+        combine_parts.combine(str(tmp_path / 'o.glb'), [])
+
+
+def test_結合は無いパーツを名指しして拒む(tmp_path):
+    import combine_parts
+    with pytest.raises(SystemExit) as e:
+        combine_parts.combine(str(tmp_path / 'o.glb'), [str(tmp_path / 'ない.glb')])
+    assert 'ない.glb' in str(e.value)
+
+
+def glb_extents(path):
+    """glb の【生の中身】から、各メッシュの大きさを返す。
+
+    ★trimesh で読み直してはいけない。trimesh は自分が書いたものを
+      そのまま読むだけなので、規約に合っているかを検証できない
+      （実際にこれで一度、直っていないのに緑になった）。
+    """
+    import json
+    import struct
+
+    import numpy as np
+    b = open(path, 'rb').read()
+    assert b[:4] == b'glTF', 'glb ではない'
+    off, js = 12, None
+    while off < len(b):
+        ln, kind = struct.unpack_from('<II', b, off)
+        if kind == 0x4E4F534A:                       # 'JSON'
+            js = json.loads(b[off + 8:off + 8 + ln].decode('utf-8'))
+            break
+        off += 8 + ln
+    assert js is not None, 'JSON の塊が無い'
+    # ★ノード変換が付いていないことも確かめる（付けても書き出しで落ちる）
+    for nd in js.get('nodes', []):
+        assert 'matrix' not in nd and 'rotation' not in nd, \
+            'ノード変換に頼っている。頂点へ焼き込むこと'
+    out = []
+    for mesh in js['meshes']:
+        for pr in mesh['primitives']:
+            a = js['accessors'][pr['attributes']['POSITION']]
+            out.append(np.array(a['max']) - np.array(a['min']))
+    return out
+
+
+def test_結合すると生のglbでYが一番長くなる(tmp_path):
+    # ★これが glTF の決まり（+Y が上）。直さないと標準のビューアで寝て表示される
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import combine_parts
+    src = tmp_path / 'part.glb'
+    trimesh.creation.box(extents=(0.4, 0.3, 1.0)).export(str(src))   # Z が一番長い
+    assert int(np.argmax(glb_extents(str(src))[0])) == 2             # 入力は Z
+    dst = tmp_path / 'out.glb'
+    combine_parts.combine(str(dst), [str(src)], up='z')
+    ext = glb_extents(str(dst))[0]
+    assert int(np.argmax(ext)) == 1, f'Y が一番長いはず: {ext}'
+    assert ext == pytest.approx([0.4, 1.0, 0.3], abs=1e-5)           # (x,y,z)->(x,z,-y)
+
+
+def test_up_yなら向きを変えない(tmp_path):
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import combine_parts
+    src = tmp_path / 'part.glb'
+    trimesh.creation.box(extents=(0.4, 0.3, 1.0)).export(str(src))
+    dst = tmp_path / 'out.glb'
+    combine_parts.combine(str(dst), [str(src)], up='y')
+    assert glb_extents(str(dst))[0] == pytest.approx([0.4, 0.3, 1.0], abs=1e-5)
+
+
+def test_パーツごとに別のメッシュのまま残る(tmp_path):
+    # ★1つに結合するとテクスチャが混ざり、パーツごとに 2048 を使う狙いが消える
+    trimesh = pytest.importorskip('trimesh')
+    import combine_parts
+    srcs = []
+    for i, ext in enumerate(((0.4, 0.3, 1.0), (0.2, 0.2, 0.5))):
+        p = tmp_path / f'p{i}.glb'
+        trimesh.creation.box(extents=ext).export(str(p))
+        srcs.append(str(p))
+    dst = tmp_path / 'out.glb'
+    combine_parts.combine(str(dst), srcs, up='z')
+    assert len(glb_extents(str(dst))) == 2
