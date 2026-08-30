@@ -89,8 +89,8 @@ $env:ATTN_BACKEND = "xformers"
 （`pillow` は torch が入れる）。
 
 ```powershell
-.\venv\Scripts\pip.exe install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja `
-  trimesh transformers "gradio==6.0.1" tensorboard pandas lpips zstandard kornia timm safetensors huggingface_hub
+.\venv\Scripts\pip.exe install imageio imageio-ffmpeg tqdm easydict "opencv-python-headless<5" ninja `
+  trimesh "transformers==5.16.1" "gradio==6.0.1" tensorboard pandas lpips zstandard kornia timm safetensors huggingface_hub
 .\venv\Scripts\pip.exe install "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
 ```
 
@@ -212,4 +212,6 @@ OK
 | SSH 越しの日本語が化ける | `windows-ssh.md` の手順8（UTF-8 プロファイル）。Python の出力は別途 `$env:PYTHONIOENCODING="utf-8"` |
 | `ssh gpu 'python -c "..."'` が構文エラー | 引用符が bash と PowerShell の二重解釈で壊れる。スクリプトを `scp` してから実行する |
 | `cv2.error: !_src.empty()` で HDRI(.exr) が読めない | `opencv-python-headless` 5.0.0 は EXR 非対応。`pip install "opencv-python-headless<5"` で 4.x に下げ、`$env:OPENCV_IO_ENABLE_OPENEXR="1"` を設定する |
+| （固定の理由）`transformers==5.16.1` | `tools/patches.py` の DINOv3 差し替えが「`hidden_states[-1]` は最終層の norm 前」という 5.16.1 の実測に依存している。別バージョンで post-norm に変わっても**例外は出ず、形の質だけが静かに落ちる**ので固定する |
+| （固定の理由）`opencv-python-headless<5` | 5.0.0 が EXR 対応を落としたため。下の行も参照 |
 | `'DINOv3ViTModel' object has no attribute 'layer'` | transformers 5.16.1 で層が `model.model.layer` へ移った。上流の `extract_features` は `self.model.layer` を直接舐めている。`output_hidden_states=True` の `hidden_states[-1]` に置き換えれば内部属性に依存せず同じものが取れる |

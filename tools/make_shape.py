@@ -50,18 +50,31 @@ def parse_args(argv=None):
                        help=f'{v} の絵（背景ぬき済みの透過PNG）')
     p.add_argument('--out', required=True, help='出力する形の glb')
     p.add_argument('--res', type=int, default=1024,
-                   help='形の解像度。512 以上なら通るが、実測があるのは 1024 と 1536'
-                        '（1536 は細部が出るが遅い）')
+                   help='形の解像度。1024 以上で、1024 + 128 の倍数のみ'
+                        '（1024 / 1152 / 1280 / 1408 / 1536 …）。'
+                        '実測があるのは 1024 と 1536（1536 は細部が出るが遅い）')
     p.add_argument('--mode', choices=_modes(), default=DEFAULT_MODE,
                    help='4枚の渡し方')
     p.add_argument('--seed', type=int, default=1234, help='乱数の種')
     p.add_argument('--repo', default=None,
                    help='TRELLIS.2 の場所。既定はこのファイルの2つ上の TRELLIS.2')
     p.add_argument('--max-tokens', type=int, default=49152,
-                   help='形の潜在に使うトークンの上限。超えると解像度が自動で下がる')
+                   help='形の潜在に使うトークンの上限。超えると解像度が 128 ずつ'
+                        '下がる。★--res 1024 のときは何を指定しても効かない'
+                        '（上流が 1024 で必ず打ち切るため）')
     a = p.parse_args(argv)
-    if a.res < 512:
-        p.error('--res は 512 以上にすること')
+    # ★上流の打ち切り条件は `num_tokens < max_num_tokens or hr_resolution == 1024`
+    #   で、下げ幅は 128 固定（trellis2_image_to_3d.py:335-339）。
+    #   1024 に着地しない値を渡すと 1024 を跨いで下がり続け、
+    #   トークン上限を小さくすると戻ってこなくなる。ここで弾いておく。
+    if a.res < 1024 or (a.res - 1024) % 128 != 0:
+        p.error('--res は 1024 以上で、1024 + 128 の倍数にすること'
+                f'（1024 / 1152 / 1280 / 1408 / 1536 …）。受け取った値: {a.res}')
+    if a.max_tokens < 1:
+        p.error(f'--max-tokens は 1 以上にすること。受け取った値: {a.max_tokens}')
+    # ★--out の妥当性は生成の【前】に見る。3分かけた後に落とさないため
+    if not os.path.splitext(a.out)[1]:
+        p.error(f'--out には拡張子を付けること（例 out\\shape.glb）。受け取った値: {a.out}')
     return a
 
 
@@ -75,7 +88,7 @@ def collect_images(args):
                 raise SystemExit(f'絵が見つかりません: {path}')
             got[v] = path
     if 'front' not in got:
-        raise SystemExit('--front は必須です')
+        raise SystemExit('正面の絵（--front）は必須です。空文字は受け付けません')
     return got
 
 
@@ -145,13 +158,15 @@ def main(argv=None):
                 pipe.models['shape_slat_flow_model_512'],
                 pipe.models['shape_slat_flow_model_1024'],
                 512, args.res, coords, {}, args.max_tokens)
-        # ★テクスチャは作らないが、decode_shape_slat だけでは面が出ないので
-        #   最小限の tex_slat を通す。中身は使わない
-        with mvcond.inject(pipe.tex_slat_sampler, n, args.mode):
-            tex_slat = pipe.sample_tex_slat(
-                c1024, pipe.models['tex_slat_flow_model_1024'], shape_slat, {})
         torch.cuda.empty_cache()
-        mesh = pipe.decode_latent(shape_slat, tex_slat, res)[0]
+        # ★テクスチャ側（sample_tex_slat / decode_tex_slat）は呼ばない。
+        #   上流の decode_latent は tex_slat を coords/attrs にしか入れず
+        #   （trellis2_image_to_3d.py:470-484）、頂点と面は decode_shape_slat が
+        #   返すメッシュそのものなので、形だけ要るなら丸ごと不要。
+        #   fill_holes は decode_latent:474 が呼んでいるぶんを自前で補う
+        mesh, _ = pipe.decode_shape_slat(shape_slat, res)
+        mesh = mesh[0]
+        mesh.fill_holes()
 
     dt = time.time() - t0
     v = mesh.vertices.detach().cpu().numpy()

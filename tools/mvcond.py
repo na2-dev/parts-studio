@@ -53,17 +53,6 @@ def prepare_cond(cond, mode):
     return cond
 
 
-def view_order(num_views, steps):
-    """stochastic で各ステップに使う View の番号を返す。
-
-    ★ステップ数に依らず尽きないよう cycle を使う。
-      1024_cascade は shape サンプラーを 2 回（512 と 1024）使うため、
-      ステップ数ぶんの配列を先に作る方式だと足りなくなる。
-    """
-    it = itertools.cycle(range(num_views))
-    return [next(it) for _ in range(steps)]
-
-
 @contextlib.contextmanager
 def inject(sampler, num_views, mode):
     """サンプラーの推論関数を包んで、多視点の条件を配る。
@@ -78,6 +67,8 @@ def inject(sampler, num_views, mode):
 
     old = sampler._inference_model
     if mode == 'stochastic':
+        # ★cycle なのでステップ数に依らず尽きない。1024_cascade は同じ
+        #   サンプラーを 512 と 1024 で 2 回使うため、有限列だと途中で落ちる
         idx = itertools.cycle(range(num_views))
 
         def new(model, x_t, t, cond, **kw):
@@ -89,8 +80,14 @@ def inject(sampler, num_views, mode):
                      for i in range(num_views)]
             return sum(preds) / num_views
 
+    # ★戻すときは pop する。代入で戻すとクラスのメソッドをインスタンス属性で
+    #   隠したままになり、sampler → __dict__ → 束縛メソッド → sampler の循環が残る
+    had_own = '_inference_model' in vars(sampler)
     sampler._inference_model = new
     try:
         yield
     finally:
-        sampler._inference_model = old
+        if had_own:
+            sampler._inference_model = old
+        else:
+            del sampler._inference_model
