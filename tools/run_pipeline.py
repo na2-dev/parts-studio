@@ -37,6 +37,10 @@ STEPS = ('shape', 'retopo', 'parts')
 BPY_PYTHON = os.path.join('venv-bpy', 'Scripts', 'python.exe')
 RETOPO = os.path.join(HERE, 'retopo_shrinkwrap.py')
 
+# 進み具合の目安。★2026-08-31 の実測（RTX 4070 Ti SUPER 16GB）。
+#   ここを実測とずらすと、待っている人が「固まった」と思って止めてしまう
+EST = {'shape': '約110秒', 'retopo': '約15秒', 'parts': '約190〜250秒'}
+
 # ★形づくりの出力は Z 上（TRELLIS.2 の向きをそのまま書き出している）。
 #   ここで決めて配る。パーツからは測れない（背が低く一番長い軸が横になる）
 SHAPE_UP = 'z'
@@ -68,8 +72,18 @@ def parse_args(argv=None):
     a = p.parse_args(argv)
     if os.path.splitext(a.out)[1].lower() != '.glb':
         p.error(f'--out は .glb にすること。受け取った値: {a.out}')
-    if a.voxel <= 0:
-        p.error(f'--voxel は 0 より大きくすること。受け取った値: {a.voxel}')
+    # ★下位の検査を前倒しする。ここで弾かないと、形づくり110秒と
+    #   リトポロジー15秒を終えた【124秒後】に argparse が落とす
+    if not 0.001 <= a.voxel <= 0.1:
+        p.error(f'--voxel は 0.001〜0.1 にすること（実測があるのは 0.009）。'
+                f'受け取った値: {a.voxel}')
+    if a.res < 1024 or (a.res - 1024) % 128 != 0:
+        p.error(f'--res は 1024 以上で、1024 + 128 の倍数にすること。'
+                f'受け取った値: {a.res}')
+    if not -0.5 < a.margin < 0.5:
+        p.error(f'--margin は -0.5〜0.5 にすること。受け取った値: {a.margin}')
+    if a.texsize < 1:
+        p.error(f'--texsize は 1 以上にすること。受け取った値: {a.texsize}')
     return a
 
 
@@ -91,6 +105,54 @@ def work_dir(args):
     if args.work:
         return os.path.abspath(args.work)
     return os.path.join(os.path.dirname(os.path.abspath(args.out)), 'pipeline')
+
+
+MANIFEST = 'manifest.json'
+
+
+def fingerprint(images):
+    """入力の絵の指紋。中身までは見ないが、取り違えはこれで十分に防げる。"""
+    return {v: {'path': os.path.abspath(p),
+                'size': os.path.getsize(p),
+                'mtime': os.path.getmtime(p)} for v, p in sorted(images.items())}
+
+
+def write_manifest(work, images):
+    """この work が【どの絵から作られたか】を残す。"""
+    import json
+    with open(os.path.join(work, MANIFEST), 'w', encoding='utf-8') as f:
+        json.dump({'images': fingerprint(images)}, f, ensure_ascii=False, indent=2)
+
+
+def check_manifest(work, images):
+    """--from で始めるとき、前に作ったものが同じ絵のものか確かめる。
+
+    ★これが無いと、別の題材の中間ファイルを黙って使う。
+      しかも --partof と視点の固定で、絵とメッシュが噛み合っていないことを
+      見つける仕組みが両方とも切れているので、
+      【前の題材の形に今の絵を貼った glb】が正常終了で出てくる。
+    """
+    import json
+    path = os.path.join(work, MANIFEST)
+    if not os.path.isfile(path):
+        raise SystemExit(
+            f'この場所で何を作ったのかの記録がありません: {path}\n'
+            '--from で途中から始めるには、同じ --work で一度通しておく必要があります。'
+            '（別の題材の中間ファイルを使ってしまわないための確認です）')
+    with open(path, encoding='utf-8') as f:
+        was = json.load(f).get('images', {})
+    now = fingerprint(images)
+    if was != now:
+        diff = sorted(set(was) | set(now))
+        lines = ['前に作ったときと絵が違います。'
+                 '別の題材の中間ファイルを使うところでした。']
+        for v in diff:
+            a, b = was.get(v), now.get(v)
+            if a != b:
+                lines.append(f'  {v}: {a["path"] if a else "無し"}'
+                             f' → {b["path"] if b else "無し"}')
+        lines += ['', f'--from=shape で作り直すか、--work を分けてください（いま {work}）。']
+        raise SystemExit('\n'.join(lines))
 
 
 def stage_paths(work):
@@ -121,14 +183,30 @@ def require(path, what, produced_by):
     return path
 
 
+def check_mesh(path, what, least=1):
+    """glb が読めて面があるか確かめる。壊れた出力を次の工程へ渡さない。"""
+    import trimesh
+    if os.path.getsize(path) == 0:
+        raise SystemExit(f'{what}が空です: {path}')
+    try:
+        m = trimesh.load(path, force='mesh', process=False)
+    except Exception as e:
+        raise SystemExit(f'{what}が読めません: {path}\n  {type(e).__name__}: {e}')
+    n = len(getattr(m, 'faces', ()))
+    if n < least:
+        raise SystemExit(f'{what}に面がありません（{n} 面）: {path}')
+    return n
+
+
 def bpy_python(repo_root=None):
     """リトポロジーを動かす Python を返す。"""
     path = os.path.join(repo_root or ROOT, BPY_PYTHON)
     if not os.path.isfile(path):
         raise SystemExit(
             f'リトポロジー用の Python が見つかりません: {path}\n'
-            'bpy は Python 3.11 用しか無いので、形づくりとは別の環境が要ります。'
-            '作り方は docs/setup/trellis2-windows.md を参照してください。')
+            'bpy は Python 3.11 用しか無いので、形づくりとは別の環境が要ります。\n'
+            '作り方は docs/setup/trellis2-windows.md の'
+            '「リトポロジー用の環境（venv-bpy）」を参照してください。')
     return path
 
 
@@ -143,6 +221,22 @@ def run_shape(args, images, dst):
         argv += ['--repo', args.repo]
     make_shape.main(argv)
     return dst
+
+
+def free_vram():
+    """形づくりが確保した VRAM を返す。
+
+    ★形づくりはこのプロセスの中で走るので、抱えたままだと
+      別プロセスの塗り（使用 13.41GB・確保 20.41GB の実測）と取り合う。
+      16GB の機体では、--res を上げたときに塗りが OOM で落ちうる。
+    """
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print('  形づくりが使った VRAM を返しました', flush=True)
 
 
 def stamp(path):
@@ -170,6 +264,11 @@ def run_retopo(args, src, dst):
         raise SystemExit(
             f'リトポロジーに失敗しました（終了コード {r.returncode}）。'
             f'出力が新しくなっていません: {dst}')
+    # ★新しくなっただけでは足りない。終了コードを見ないと決めた以上、
+    #   「書き終えてから落ちた」と「書いている途中で落ちた」を区別できない。
+    #   読めて面があるところまで確かめる（子は dst へ直接書くので、
+    #   途中で落ちると前回の正しい出力ごと壊れる）
+    check_mesh(dst, 'リトポロジーの出力')
     if r.returncode != 0:
         # ★黙って飲み込まない。出力はあるが、異常終了したことは伝える
         print(f'※ リトポロジーは出力を書きましたが、終了コードが {r.returncode} '
@@ -212,17 +311,28 @@ def main(argv=None):
     #   リトポロジー済みの形があるのに始められない
     need = NEEDS[args.start]
     if need:
+        check_manifest(work, images)             # ★別の題材のものを使わない
         require(paths[need[0]], need[1], need[2])
+        check_mesh(paths[need[0]], need[1])
+    else:
+        write_manifest(work, images)
+
+    # ★リトポロジー用の環境は【形づくりの前】に確かめる。
+    #   あとで見ると、109 秒かけた形づくりを捨ててから足りないと分かる
+    if 'retopo' in todo:
+        bpy_python()
 
     if 'shape' in todo:
-        print('=== 1) 形を作る（約3分）', flush=True)
+        print(f'=== 1) 形を作る（{EST["shape"]}）', flush=True)
         run_shape(args, images, paths['shape'])
+        check_mesh(paths['shape'], '形')          # ★中断すると書きかけが残る
+        free_vram()
 
     if 'retopo' in todo:
-        print('=== 2) リトポロジー（約30秒）', flush=True)
+        print(f'=== 2) リトポロジー（{EST["retopo"]}）', flush=True)
         run_retopo(args, paths['shape'], paths['retopo'])
 
-    print('=== 3) パーツづくり（約2分30秒）', flush=True)
+    print(f'=== 3) パーツづくり（{EST["parts"]}）', flush=True)
     run_parts(args, images, paths['retopo'], work, args.out)
 
     print(f'できました: {args.out}（合計 {time.time() - t0:.0f}秒）', flush=True)

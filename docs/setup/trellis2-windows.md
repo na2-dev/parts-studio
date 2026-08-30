@@ -155,6 +155,31 @@ print(snapshot_download('microsoft/TRELLIS.2-4B', token=os.environ['HF_TOKEN'], 
 "@
 ```
 
+## 7. リトポロジー用の環境（venv-bpy）
+
+リトポロジー（[ADR-0007](../adr/0007-retopology-before-uv.md)）は Blender を
+**Python から使う**（`bpy` モジュール）。**bpy は Python 3.11 用しか無く**、
+形づくりの環境と依存が衝突するので、専用の環境を作る。
+
+```powershell
+cd C:\work\parts-studio
+py -3.11 -m venv venv-bpy
+.\venv-bpy\Scripts\pip.exe install bpy trimesh numpy
+```
+
+確かめる。
+
+```powershell
+.\venv-bpy\Scripts\python.exe -c "import bpy; print(bpy.app.version_string)"
+```
+
+**★終了コードは 0 にならない。** bpy をモジュールとして使うと、
+処理を終えたあとインタプリタの終了時に落ちることがある
+（Windows で実測。終了コード `3221225477` = `0xC0000005` ACCESS_VIOLATION）。
+**出力の glb は正しく書けている。**
+`tools/run_pipeline.py` は終了コードではなく
+「出力が新しくなり、読めて面があるか」で成否を判定している。
+
 ## 動作確認
 
 ```powershell

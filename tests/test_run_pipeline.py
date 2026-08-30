@@ -155,6 +155,9 @@ class Recorder:
             open(out, 'w').write('x')
             return out
 
+        # ★偽の glb を書くので、中身を見る工程は差し替える
+        monkeypatch.setattr(run_pipeline, 'check_mesh', lambda *a, **k: 1)
+        monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
         monkeypatch.setattr(run_pipeline, 'run_shape', fake_shape)
         monkeypatch.setattr(run_pipeline, 'run_retopo', fake_retopo)
         monkeypatch.setattr(run_pipeline, 'run_parts', fake_parts)
@@ -203,6 +206,9 @@ def test_設定がそれぞれの工程へ届く(tmp_path, imgs, rec):
 def test_retopoから始めると形づくりを飛ばす(tmp_path, imgs, rec):
     ps = run_pipeline.stage_paths(str(tmp_path / 'w'))
     os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    run_pipeline.write_manifest(str(tmp_path / 'w'),
+                                run_pipeline.collect_images(
+                                    run_pipeline.parse_args(base_argv(tmp_path, imgs))))
     open(ps['shape'], 'w').write('x')
     run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'retopo'])
     assert [c[0] for c in rec.calls] == ['retopo', 'parts']
@@ -211,12 +217,19 @@ def test_retopoから始めると形づくりを飛ばす(tmp_path, imgs, rec):
 def test_partsから始めると2つ飛ばす(tmp_path, imgs, rec):
     ps = run_pipeline.stage_paths(str(tmp_path / 'w'))
     os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    run_pipeline.write_manifest(str(tmp_path / 'w'),
+                                run_pipeline.collect_images(
+                                    run_pipeline.parse_args(base_argv(tmp_path, imgs))))
     open(ps['retopo'], 'w').write('x')
     run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
     assert [c[0] for c in rec.calls] == ['parts']
 
 
 def test_途中から始めて前の出力が無ければ何もせず止まる(tmp_path, imgs, rec):
+    os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    run_pipeline.write_manifest(str(tmp_path / 'w'),
+                                run_pipeline.collect_images(
+                                    run_pipeline.parse_args(base_argv(tmp_path, imgs))))
     with pytest.raises(SystemExit) as e:
         run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'retopo'])
     assert '形が見つかりません' in str(e.value)
@@ -224,6 +237,10 @@ def test_途中から始めて前の出力が無ければ何もせず止まる(t
 
 
 def test_partsから始めてリトポロジーが無ければ止まる(tmp_path, imgs, rec):
+    os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    run_pipeline.write_manifest(str(tmp_path / 'w'),
+                                run_pipeline.collect_images(
+                                    run_pipeline.parse_args(base_argv(tmp_path, imgs))))
     with pytest.raises(SystemExit) as e:
         run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
     assert 'リトポロジー済みの形' in str(e.value)
@@ -294,6 +311,7 @@ def test_リトポロジーは別プロセスで動かす(tmp_path, imgs, monkey
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    monkeypatch.setattr(run_pipeline, 'check_mesh', lambda *a, **k: 1)
     monkeypatch.setattr(subprocess, 'run', fake_run)
     a = run_pipeline.parse_args(base_argv(tmp_path, imgs, voxel=0.02))
     src = tmp_path / 's.glb'
@@ -316,6 +334,7 @@ def retopo_env(tmp_path, imgs, monkeypatch, code, writes):
         return subprocess.CompletedProcess(cmd, code)
 
     monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    monkeypatch.setattr(run_pipeline, 'check_mesh', lambda *a, **k: 1)
     monkeypatch.setattr(subprocess, 'run', fake_run)
     a = run_pipeline.parse_args(base_argv(tmp_path, imgs))
     src = tmp_path / 's.glb'
@@ -376,7 +395,264 @@ def test_partsから始めるとき形は要らない(tmp_path, imgs, rec):
     # ★リトポロジー済みの形だけあれば始められる
     ps = run_pipeline.stage_paths(str(tmp_path / 'w'))
     os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    run_pipeline.write_manifest(str(tmp_path / 'w'),
+                                run_pipeline.collect_images(
+                                    run_pipeline.parse_args(base_argv(tmp_path, imgs))))
     open(ps['retopo'], 'w').write('x')
     assert not os.path.exists(ps['shape'])
     run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
     assert [c[0] for c in rec.calls] == ['parts']
+
+
+def test_marginがパーツづくりへ届く(tmp_path, imgs, monkeypatch):
+    import make_parts
+    got = {}
+    monkeypatch.setattr(make_parts, 'main', lambda argv: got.update(argv=argv))
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs, margin=0.04))
+    run_pipeline.run_parts(a, run_pipeline.collect_images(a), 'R.glb',
+                           str(tmp_path / 'w'), 'OUT.glb')
+    assert got['argv'][got['argv'].index('--margin') + 1] == '0.04'
+
+
+# ---- レビューで見つかった穴 -----------------------------------------------
+
+def test_絵が違えば途中から始めさせない(tmp_path, imgs, rec):
+    # ★★critical。前の題材の形に今の絵を貼った glb が正常終了で出てくる
+    run_pipeline.main(base_argv(tmp_path, imgs))
+    other = tmp_path / 'other.png'
+    other.write_bytes(bytes([0x89]) + b'PNG-DIFFERENT')
+    argv = base_argv(tmp_path, imgs) + ['--from', 'parts']
+    argv[argv.index('--front') + 1] = str(other)
+    rec.calls.clear()
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.main(argv)
+    msg = str(e.value)
+    assert '絵が違います' in msg
+    assert '--from=shape' in msg
+    assert rec.calls == []
+
+
+def test_同じ絵なら途中から始められる(tmp_path, imgs, rec):
+    run_pipeline.main(base_argv(tmp_path, imgs))
+    rec.calls.clear()
+    run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
+    assert [c[0] for c in rec.calls] == ['parts']
+
+
+def test_記録が無ければ途中から始めさせない(tmp_path, imgs, rec):
+    ps = run_pipeline.stage_paths(str(tmp_path / 'w'))
+    os.makedirs(str(tmp_path / 'w'), exist_ok=True)
+    open(ps['retopo'], 'w').write('x')
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
+    assert '記録がありません' in str(e.value)
+    assert rec.calls == []
+
+
+def test_最初から始めると記録を残す(tmp_path, imgs, rec):
+    run_pipeline.main(base_argv(tmp_path, imgs))
+    assert os.path.isfile(os.path.join(str(tmp_path / 'w'), run_pipeline.MANIFEST))
+
+
+def test_指紋は絵ごとに違う(tmp_path):
+    a, b = tmp_path / 'a.png', tmp_path / 'b.png'
+    a.write_bytes(b'12345')
+    b.write_bytes(b'1234567')
+    assert run_pipeline.fingerprint({'front': str(a)}) != \
+           run_pipeline.fingerprint({'front': str(b)})
+
+
+# ---- 壊れた出力を次の工程へ渡さない ---------------------------------------
+
+def test_空の出力は通さない(tmp_path):
+    p = tmp_path / 'e.glb'
+    p.write_bytes(b'')
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.check_mesh(str(p), '形')
+    assert '空です' in str(e.value)
+
+
+def test_読めない出力は通さない(tmp_path):
+    pytest.importorskip('trimesh')
+    p = tmp_path / 'x.glb'
+    p.write_bytes(b'not a glb at all')
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.check_mesh(str(p), '形')
+    assert '読めません' in str(e.value)
+
+
+def test_読める出力は面数を返す(tmp_path):
+    trimesh = pytest.importorskip('trimesh')
+    p = tmp_path / 'ok.glb'
+    trimesh.creation.box().export(str(p))
+    assert run_pipeline.check_mesh(str(p), '形') == 12
+
+
+def test_リトポロジーの出力も読めるか見る(tmp_path, imgs, monkeypatch):
+    # ★終了コードを見ないと決めた以上、「書き終えてから落ちた」と
+    #   「書いている途中で落ちた」を区別できない
+    import subprocess
+
+    def fake_run(cmd, **kw):
+        open(cmd[3], 'wb').write(b'TRUNCATED')
+        return subprocess.CompletedProcess(cmd, 3221225477)
+
+    monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs))
+    src = tmp_path / 's.glb'
+    src.write_text('x')
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.run_retopo(a, str(src), str(tmp_path / 'r.glb'))
+    assert '読めません' in str(e.value)
+
+
+# ---- 前もって確かめる -----------------------------------------------------
+
+def test_リトポロジー環境は形づくりの前に確かめる(tmp_path, imgs, rec, monkeypatch):
+    # ★あとで見ると、110秒かけた形づくりを捨ててから足りないと分かる
+    def boom(*a):
+        raise SystemExit('venv-bpy が無い')
+
+    monkeypatch.setattr(run_pipeline, 'bpy_python', boom)
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.main(base_argv(tmp_path, imgs))
+    assert 'venv-bpy' in str(e.value)
+    assert rec.calls == []
+
+
+def test_partsから始めるならリトポロジー環境は要らない(tmp_path, imgs, rec, monkeypatch):
+    run_pipeline.main(base_argv(tmp_path, imgs))
+    rec.calls.clear()
+    monkeypatch.setattr(run_pipeline, 'bpy_python',
+                        lambda *a: pytest.fail('要らないのに確かめている'))
+    run_pipeline.main(base_argv(tmp_path, imgs) + ['--from', 'parts'])
+    assert [c[0] for c in rec.calls] == ['parts']
+
+
+def test_案内先にvenv_bpyの作り方がある():
+    # ★存在しない案内は害。文書に節があることを確かめる
+    import pathlib
+    doc = pathlib.Path(ROOT) / 'docs' / 'setup' / 'trellis2-windows.md'
+    text = doc.read_text(encoding='utf-8')
+    assert 'venv-bpy' in text
+    assert 'pip.exe install bpy' in text
+
+
+# ---- 下位の検査を前倒しする -----------------------------------------------
+
+@pytest.mark.parametrize('opt,bad', [
+    ('--voxel', '0.0001'), ('--voxel', '1.0'),
+    ('--res', '1000'), ('--res', '512'),
+    ('--margin', '0.6'), ('--texsize', '0'),
+])
+def test_下位で落ちる値はここで弾く(tmp_path, imgs, opt, bad):
+    # ★弾かないと、形づくり110秒とリトポロジー15秒を終えた後に落ちる
+    with pytest.raises(SystemExit):
+        run_pipeline.parse_args(base_argv(tmp_path, imgs) + [opt, bad])
+
+
+@pytest.mark.parametrize('res', ['1024', '1152', '1536'])
+def test_通る解像度(tmp_path, imgs, res):
+    assert run_pipeline.parse_args(
+        base_argv(tmp_path, imgs) + ['--res', res]).res == int(res)
+
+
+def test_目安は実測に合わせる():
+    # ★実測とずれると、待っている人が「固まった」と思って止めてしまう
+    assert set(run_pipeline.EST) == set(run_pipeline.STEPS)
+    assert run_pipeline.EST['shape'] == '約110秒'
+    assert run_pipeline.EST['parts'] == '約190〜250秒'
+
+
+def test_形づくりのあとVRAMを返す(tmp_path, imgs, rec, monkeypatch):
+    # ★抱えたままだと、別プロセスの塗り（確保 20.41GB）と取り合う
+    called = []
+    monkeypatch.setattr(run_pipeline, 'free_vram', lambda: called.append(1))
+    run_pipeline.main(base_argv(tmp_path, imgs))
+    assert called == [1]
+
+
+def test_形づくりの出力が壊れていれば止まる(tmp_path, imgs, monkeypatch):
+    # ★中断すると書きかけが残り、次の工程で「リトポロジーの失敗」に見える
+    def bad_shape(args, images, dst):
+        open(dst, 'wb').write(b'')
+        return dst
+
+    monkeypatch.setattr(run_pipeline, 'run_shape', bad_shape)
+    monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    with pytest.raises(SystemExit) as e:
+        run_pipeline.main(base_argv(tmp_path, imgs))
+    assert '形が空です' in str(e.value)
+
+
+def test_パーツづくりへ渡す絵と作業場所(tmp_path, imgs, monkeypatch):
+    import make_parts
+    got = {}
+    monkeypatch.setattr(make_parts, 'main', lambda argv: got.update(argv=argv))
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs))
+    run_pipeline.run_parts(a, run_pipeline.collect_images(a), 'R.glb',
+                           str(tmp_path / 'w'), 'OUT.glb')
+    argv = got['argv']
+    for v in run_pipeline.VIEWS:
+        assert argv[argv.index(f'--{v}') + 1] == imgs[v]     # ★値まで見る
+    assert argv[argv.index('--work') + 1] == os.path.join(str(tmp_path / 'w'), 'parts')
+
+
+def test_形づくりへ渡す絵とrepo(tmp_path, imgs, monkeypatch):
+    import make_shape
+    got = {}
+    monkeypatch.setattr(make_shape, 'main', lambda argv: got.update(argv=argv))
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs) + ['--repo', 'R:/trellis'])
+    run_pipeline.run_shape(a, run_pipeline.collect_images(a), 'S.glb')
+    argv = got['argv']
+    for v in run_pipeline.VIEWS:
+        assert argv[argv.index(f'--{v}') + 1] == imgs[v]
+    assert argv[argv.index('--repo') + 1] == 'R:/trellis'
+
+
+def test_リトポロジーは形づくりの出力を入力に取る(tmp_path, imgs, monkeypatch):
+    # ★src と dst を取り違えると、自分自身を読んで書くことになる
+    import subprocess
+    got = {}
+
+    def fake_run(cmd, **kw):
+        got['cmd'] = cmd
+        open(cmd[3], 'w').write('x')
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    monkeypatch.setattr(run_pipeline, 'check_mesh', lambda *a, **k: 1)
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs))
+    src, dst = tmp_path / 's.glb', tmp_path / 'r.glb'
+    src.write_text('x')
+    run_pipeline.run_retopo(a, str(src), str(dst))
+    assert got['cmd'][2] == str(src)            # ★値まで見る
+    assert got['cmd'][3] == str(dst)
+    assert got['cmd'][2] != got['cmd'][3]
+
+
+def test_リトポロジーへ渡すパスは絶対にする(tmp_path, imgs, monkeypatch):
+    # ★別ディレクトリ（ROOT）で動かすので、相対だと壊れる
+    import subprocess
+    got = {}
+
+    def fake_run(cmd, **kw):
+        got['cmd'] = cmd
+        open(cmd[3], 'w').write('x')
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(run_pipeline, 'bpy_python', lambda *a: 'BPY.exe')
+    monkeypatch.setattr(run_pipeline, 'check_mesh', lambda *a, **k: 1)
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    a = run_pipeline.parse_args(base_argv(tmp_path, imgs))
+    before = os.getcwd()
+    os.chdir(str(tmp_path))
+    try:
+        open('s.glb', 'w').write('x')
+        run_pipeline.run_retopo(a, 's.glb', 'r.glb')       # ★相対で渡す
+    finally:
+        os.chdir(before)                                   # ★元の場所へ戻す
+    assert os.path.isabs(got['cmd'][2]), f'入力が相対のまま: {got["cmd"][2]}'
+    assert os.path.isabs(got['cmd'][3]), f'出力が相対のまま: {got["cmd"][3]}'
