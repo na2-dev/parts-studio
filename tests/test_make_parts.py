@@ -451,3 +451,179 @@ def test_パーツごとに別のメッシュのまま残る(tmp_path):
     dst = tmp_path / 'out.glb'
     combine_parts.combine(str(dst), srcs, up='z')
     assert len(glb_extents(str(dst))) == 2
+
+
+# ---- 差し替えていた工程そのものを見る -------------------------------------
+# ★Recorder は paint / project / combine を丸ごと差し替えるので、
+#   その【中身】が壊れても気づけない。ここは1段下で検証する。
+
+class FakeMesh:
+    def __init__(self, n=3):
+        import numpy as np
+        self.vertices = np.zeros((n, 3))
+        self.exported = None
+
+    def export(self, path):
+        self.exported = path
+        open(path, 'w').write('x')
+
+
+def test_投影は全身と上方向をそのまま下へ渡す(tmp_path, monkeypatch):
+    # ★partof が抜けると1画素も貼れない。up が抜けるとパーツから測って外す
+    import apply_reference_detail as ARD
+    got = {}
+
+    def fake(src, dst, images, partof=None, fixviews=False, up=None, **kw):
+        got.update(src=src, dst=dst, partof=partof, fixviews=fixviews, up=up)
+        open(dst, 'w').write('x')
+
+    monkeypatch.setattr(ARD, 'project', fake)
+    ps = make_parts.part_paths(str(tmp_path), 'head')
+    make_parts.project(make_parts.PARTS[0], ps, {'front': 'f.png'}, 'FULL.glb', 'z')
+    assert got['partof'] == 'FULL.glb'
+    assert got['up'] == 'z'
+    assert got['fixviews'] is True
+    assert got['src'] == ps['painted'] and got['dst'] == ps['final']
+
+
+def test_塗りへ渡す引数(tmp_path, imgs, monkeypatch):
+    # ★texsize が固定値に化けると、黙って解像度が落ちる
+    import make_texture
+    got = {}
+    monkeypatch.setattr(make_texture, 'main', lambda argv: got.update(argv=argv))
+    a = make_parts.parse_args(base_argv(tmp_path, imgs, texsize=2048))
+    ps = make_parts.part_paths(str(tmp_path), 'head')
+    make_parts.paint(make_parts.PARTS[0], ps, a)
+    argv = got['argv']
+    assert argv[argv.index('--texsize') + 1] == '2048'
+    assert argv[argv.index('--mesh') + 1] == ps['shape']       # ★ならした形を塗る
+    assert argv[argv.index('--out') + 1] == ps['painted']
+    assert '--paint-root' not in argv                          # 未指定なら渡さない
+
+
+def test_塗り環境を指定したら渡す(tmp_path, imgs, monkeypatch):
+    import make_texture
+    got = {}
+    monkeypatch.setattr(make_texture, 'main', lambda argv: got.update(argv=argv))
+    a = make_parts.parse_args(base_argv(tmp_path, imgs) + ['--paint-root', 'X:/env'])
+    make_parts.paint(make_parts.PARTS[0], make_parts.part_paths(str(tmp_path), 'head'), a)
+    assert got['argv'][got['argv'].index('--paint-root') + 1] == 'X:/env'
+
+
+def test_ならしの既定は実測した値():
+    # ★8回・0.5 で「フードの縁が滑らかになり目がはっきりする」ことを実測している。
+    #   変えると静かに結果が変わる
+    import smooth_part
+    assert (smooth_part.ITERS, smooth_part.LAMBDA) == (8, 0.5)
+
+
+def test_ならしの既定はmake_partsと揃っている(tmp_path, imgs):
+    import smooth_part
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    assert (a.smooth_iters, a.smooth_lambda) == (smooth_part.ITERS, smooth_part.LAMBDA)
+
+
+# ---- apply_reference_detail.project の中身 --------------------------------
+
+def stub_loader(seen):
+    def fake(path, up=None):
+        seen.append((path, up))
+        return FakeMesh(), False
+    return fake
+
+
+def test_全身にもパーツと同じ上方向を使う(tmp_path, monkeypatch):
+    # ★ここがずれると、パーツと基準の座標系が食い違って貼れなくなる
+    import apply_reference_detail as ARD
+    seen = []
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader(seen))
+    monkeypatch.setattr(ARD, 'apply_detail', lambda mesh, imgs, **kw: FakeMesh())
+    ARD.project('PART.glb', str(tmp_path / 'o.glb'), {'front': object()},
+                partof='FULL.glb', up='z')
+    assert seen == [('PART.glb', 'z'), ('FULL.glb', 'z')]
+
+
+def test_全身を渡すと正規化の基準と固定が入る(tmp_path, monkeypatch):
+    import apply_reference_detail as ARD
+    got = {}
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader([]))
+    monkeypatch.setattr(ARD, 'apply_detail',
+                        lambda mesh, imgs, **kw: got.update(kw) or FakeMesh())
+    ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()},
+                partof='FULL.glb', up='z')
+    assert got['fixfit'] is True
+    assert got['norm_ref'] is not None
+
+
+def test_全身を渡さなければ正規化の基準を入れない(tmp_path, monkeypatch):
+    import apply_reference_detail as ARD
+    got = {}
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader([]))
+    monkeypatch.setattr(ARD, 'apply_detail',
+                        lambda mesh, imgs, **kw: got.update(kw) or FakeMesh())
+    ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()})
+    assert 'norm_ref' not in got and 'fixfit' not in got
+
+
+@pytest.mark.parametrize('fixviews', [True, False])
+def test_視点の割り当ては必ず元に戻す(tmp_path, monkeypatch, fixviews):
+    # ★同じプロセスで頭→体と続けて呼ぶので、戻し忘れると次のパーツが壊れる
+    import project_detail as PD
+    import apply_reference_detail as ARD
+    before = PD.assign_views
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader([]))
+    monkeypatch.setattr(ARD, 'apply_detail', lambda mesh, imgs, **kw: FakeMesh())
+    ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()},
+                fixviews=fixviews)
+    assert PD.assign_views is before
+
+
+def test_途中で落ちても視点の割り当てを戻す(tmp_path, monkeypatch):
+    import project_detail as PD
+    import apply_reference_detail as ARD
+    before = PD.assign_views
+
+    def boom(mesh, imgs, **kw):
+        raise RuntimeError('途中で落ちた')
+
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader([]))
+    monkeypatch.setattr(ARD, 'apply_detail', boom)
+    with pytest.raises(RuntimeError):
+        ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()},
+                    fixviews=True)
+    assert PD.assign_views is before
+
+
+def test_固定するときだけ差し替える(tmp_path, monkeypatch):
+    import project_detail as PD
+    import apply_reference_detail as ARD
+    seen = []
+    monkeypatch.setattr(ARD, 'load_mesh_as_yup', stub_loader([]))
+    monkeypatch.setattr(ARD, 'apply_detail',
+                        lambda mesh, imgs, **kw: seen.append(PD.assign_views) or FakeMesh())
+    ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()}, fixviews=True)
+    ARD.project('a.glb', str(tmp_path / 'o.glb'), {'front': object()}, fixviews=False)
+    assert seen[0] is ARD._fixed_assign        # 固定した
+    assert seen[1] is not ARD._fixed_assign    # 固定していない
+
+
+def test_正面の絵が無ければ止まる(tmp_path, monkeypatch):
+    import apply_reference_detail as ARD
+    with pytest.raises(SystemExit) as e:
+        ARD.project('a.glb', str(tmp_path / 'o.glb'), {'left': object()})
+    assert '正面' in str(e.value)
+
+
+def test_結合は1つに混ぜない(tmp_path):
+    # ★混ぜるとテクスチャが1枚になり、パーツごとに 2048 を使う狙いが消える
+    trimesh = pytest.importorskip('trimesh')
+    import combine_parts
+    srcs = []
+    for i, ext in enumerate(((0.4, 0.3, 1.0), (0.2, 0.2, 0.5))):
+        p = tmp_path / f'p{i}.glb'
+        trimesh.creation.box(extents=ext).export(str(p))
+        srcs.append(str(p))
+    dst = tmp_path / 'out.glb'
+    info = combine_parts.combine(str(dst), srcs, up='z')
+    assert len(info) == 2
+    assert len(glb_extents(str(dst))) == 2         # 生の glb でも2つ
