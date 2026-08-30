@@ -44,9 +44,8 @@ def test_ならすのは頭だけ():
     assert smoothed == ['head']
 
 
-def test_視点の対応づけは固定する():
-    # ★座標の規約から決まる並びなので題材によらない。自動割り当ては
-    #   それを毎回引き直しているだけで、外すことがある（頭で実測）
+def test_視点の対応づけは既定で固定する():
+    # ★この題材で確かめただけ。座標の規約から導いたものではない
     assert make_parts.FIXVIEWS is True
 
 
@@ -131,8 +130,8 @@ class Recorder:
         self.calls = []
         self.tmp = tmp_path
 
-        def fake_split(shape, work, margin):
-            self.calls.append(('split', shape, margin))
+        def fake_split(shape, work, margin, up):
+            self.calls.append(('split', shape, margin, up))
             paths = {p['name']: make_parts.part_paths(work, p['name'])
                      for p in make_parts.PARTS}
             for ps in paths.values():
@@ -145,14 +144,14 @@ class Recorder:
             open(paths['shape'], 'w').write('x')
             return paths['shape']
 
-        def fake_paint(part, paths, args):
-            self.calls.append(('paint', part['name'], args.texsize))
+        def fake_paint(part, paths, args, up):
+            self.calls.append(('paint', part['name'], args.texsize, up))
             open(paths['painted'], 'w').write('x')
             return paths['painted']
 
-        def fake_project(part, paths, images, shape, up):
+        def fake_project(part, paths, images, shape, up, fixviews=True):
             self.calls.append(('project', part['name'], up,
-                               shape, tuple(sorted(images))))
+                               shape, tuple(sorted(images)), fixviews))
             open(paths['final'], 'w').write('x')
             return paths['final']
 
@@ -264,7 +263,8 @@ def test_texsizeがそのまま塗りへ渡る(tmp_path, imgs, rec):
 def test_結合には投影後のものを渡す(tmp_path, imgs, rec):
     make_parts.main(base_argv(tmp_path, imgs))
     dst, parts, _ = rec.combined[0]
-    assert dst == str(tmp_path / 'final.glb')
+    # ★出来上がるまで --out には置かない。作業用の名前で組み立てる
+    assert os.path.basename(dst) == '_combined.glb'
     assert [os.path.basename(p) for p in parts] == ['head_final.glb', 'body_final.glb']
 
 
@@ -289,7 +289,7 @@ def test_切った結果が無ければ止まる(tmp_path, imgs, monkeypatch):
     import split_parts
     monkeypatch.setattr(split_parts, 'split', lambda *a, **k: None)
     with pytest.raises(SystemExit) as e:
-        make_parts.split(str(tmp_path / 'a.glb'), str(tmp_path), 0.01)
+        make_parts.split(str(tmp_path / 'a.glb'), str(tmp_path), 0.01, 'z')
     assert 'head' in str(e.value) or 'body' in str(e.value)
 
 
@@ -493,7 +493,7 @@ def test_塗りへ渡す引数(tmp_path, imgs, monkeypatch):
     monkeypatch.setattr(make_texture, 'main', lambda argv: got.update(argv=argv))
     a = make_parts.parse_args(base_argv(tmp_path, imgs, texsize=2048))
     ps = make_parts.part_paths(str(tmp_path), 'head')
-    make_parts.paint(make_parts.PARTS[0], ps, a)
+    make_parts.paint(make_parts.PARTS[0], ps, a, 'z')
     argv = got['argv']
     assert argv[argv.index('--texsize') + 1] == '2048'
     assert argv[argv.index('--mesh') + 1] == ps['shape']       # ★ならした形を塗る
@@ -506,7 +506,8 @@ def test_塗り環境を指定したら渡す(tmp_path, imgs, monkeypatch):
     got = {}
     monkeypatch.setattr(make_texture, 'main', lambda argv: got.update(argv=argv))
     a = make_parts.parse_args(base_argv(tmp_path, imgs) + ['--paint-root', 'X:/env'])
-    make_parts.paint(make_parts.PARTS[0], make_parts.part_paths(str(tmp_path), 'head'), a)
+    make_parts.paint(make_parts.PARTS[0],
+                     make_parts.part_paths(str(tmp_path), 'head'), a, 'z')
     assert got['argv'][got['argv'].index('--paint-root') + 1] == 'X:/env'
 
 
@@ -627,3 +628,201 @@ def test_結合は1つに混ぜない(tmp_path):
     info = combine_parts.combine(str(dst), srcs, up='z')
     assert len(info) == 2
     assert len(glb_extents(str(dst))) == 2         # 生の glb でも2つ
+
+
+# ---- レビューで「壊しても緑」だった箇所 -----------------------------------
+
+def test_塗りへ上方向を渡す(tmp_path, imgs, monkeypatch):
+    # ★渡さないと塗りだけ既定（z）で動く。Y上の形をもう一度倒して塗るので、
+    #   形は往復して戻り【テクスチャだけが壊れる】
+    import make_texture
+    got = {}
+    monkeypatch.setattr(make_texture, 'main', lambda argv: got.update(argv=argv))
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    make_parts.paint(make_parts.PARTS[0], make_parts.part_paths(str(tmp_path), 'head'),
+                     a, 'y')
+    assert got['argv'][got['argv'].index('--up') + 1] == 'y'
+
+
+def test_切る工程へ上方向を渡す(tmp_path, monkeypatch):
+    # ★渡さないと split_parts が「一番長い軸が上」で決め直す。腕を広げた題材で
+    #   横幅が背丈を超えると、腕に沿って首を探す
+    import split_parts
+    got = {}
+    monkeypatch.setattr(split_parts, 'split',
+                        lambda src, h, b, margin, up: got.update(margin=margin, up=up) or
+                        (open(h, 'w').write('x'), open(b, 'w').write('x')))
+    make_parts.split('a.glb', str(tmp_path), 0.02, 'y')
+    assert got == {'margin': 0.02, 'up': 'y'}
+
+
+def test_通しでも上方向が4か所すべてへ届く(tmp_path, imgs, rec):
+    # ★split / paint / project / combine の4か所。1つでも抜けると静かに壊れる
+    import combine_parts
+    seen = []
+    make_parts.main(base_argv(tmp_path, imgs) + ['--up', 'y'])
+    ups = {c[0]: c[-1] if c[0] == 'split' else None for c in rec.calls}
+    assert [c[3] for c in rec.calls if c[0] == 'split'] == ['y']
+    assert {c[3] for c in rec.calls if c[0] == 'paint'} == {'y'}
+    assert {c[2] for c in rec.calls if c[0] == 'project'} == {'y'}
+    assert rec.combined[0][2] == 'y'
+
+
+def test_通しでmarginが切る工程へ届く(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs, margin=0.05))
+    assert [c[2] for c in rec.calls if c[0] == 'split'] == [0.05]
+
+
+def test_marginの範囲(tmp_path, imgs):
+    for bad in ('0.6', '-0.6'):
+        with pytest.raises(SystemExit):
+            make_parts.parse_args(base_argv(tmp_path, imgs) + ['--margin', bad])
+    assert make_parts.parse_args(base_argv(tmp_path, imgs) +
+                                 ['--margin', '0.4']).margin == 0.4
+
+
+def test_視点の固定は外せる(tmp_path, imgs, rec):
+    # ★別の題材では固定の並びが合わないかもしれない
+    make_parts.main(base_argv(tmp_path, imgs) + ['--no-fixviews'])
+    assert {c[5] for c in rec.calls if c[0] == 'project'} == {False}
+
+
+def test_既定では固定する(tmp_path, imgs, rec):
+    make_parts.main(base_argv(tmp_path, imgs))
+    assert {c[5] for c in rec.calls if c[0] == 'project'} == {True}
+
+
+def test_ならすのは頭だけを実際に確かめる(tmp_path, imgs, monkeypatch):
+    # ★PARTS の表ではなく【それを使うコード】を見る。条件が反転すると
+    #   体がならされて背中の鍵穴が消え、頭はならされない
+    import smooth_part
+    smoothed = []
+    monkeypatch.setattr(smooth_part, 'smooth',
+                        lambda src, dst, i, l: smoothed.append(os.path.basename(src)) or
+                        open(dst, 'w').write('x'))
+    a = make_parts.parse_args(base_argv(tmp_path, imgs))
+    for part in make_parts.PARTS:
+        ps = make_parts.part_paths(str(tmp_path), part['name'])
+        open(ps['raw'], 'w').write('x')
+        make_parts.prepare_shape(part, ps, a)
+    assert smoothed == ['head_raw.glb']
+    # 体はそのまま写しただけ
+    assert os.path.isfile(make_parts.part_paths(str(tmp_path), 'body')['shape'])
+
+
+def test_ならし0回なら頭も写すだけ(tmp_path, imgs, monkeypatch):
+    import smooth_part
+    monkeypatch.setattr(smooth_part, 'smooth',
+                        lambda *a, **k: pytest.fail('0回なのに呼んでいる'))
+    a = make_parts.parse_args(base_argv(tmp_path, imgs) + ['--smooth-iters', '0'])
+    ps = make_parts.part_paths(str(tmp_path), 'head')
+    open(ps['raw'], 'w').write('x')
+    make_parts.prepare_shape(make_parts.PARTS[0], ps, a)
+    assert os.path.isfile(ps['shape'])
+
+
+def test_切った先を取り違えない(tmp_path, monkeypatch):
+    # ★頭と体を入れ替えると、体がならされて頭がならされない
+    import split_parts
+    got = {}
+    monkeypatch.setattr(split_parts, 'split',
+                        lambda src, h, b, margin, up: got.update(head=h, body=b) or
+                        (open(h, 'w').write('x'), open(b, 'w').write('x')))
+    make_parts.split('a.glb', str(tmp_path), 0.01, 'z')
+    assert os.path.basename(got['head']) == 'head_raw.glb'
+    assert os.path.basename(got['body']) == 'body_raw.glb'
+
+
+def test_固定の並び():
+    # ★FIXED の中身そのものを固定する。入れ替わると正面の顔を後頭部に貼る
+    import apply_reference_detail as ARD
+    assert ARD.FIXED == {'front': 'front', 'right': 'left',
+                         'back': 'back', 'left': 'right'}
+
+
+def test_固定の並びは戻り値の形も守る():
+    # ★assign_views の契約は {向き: (絵のキー, 一致度)}
+    import apply_reference_detail as ARD
+    got = ARD._fixed_assign(None, {'front': 1, 'left': 1, 'right': 1, 'back': 1}, 0)
+    assert set(got) == set(ARD.FIXED)
+    for v, (k, score) in got.items():
+        assert k == ARD.FIXED[v] and score == 1.0
+
+
+def test_複数パーツが全部同じだけ回る(tmp_path):
+    # ★1個目だけ回すと頭だけ立って体が寝る
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import combine_parts
+    srcs = []
+    for i in range(2):
+        p = tmp_path / f'p{i}.glb'
+        trimesh.creation.box(extents=(0.4, 0.3, 1.0)).export(str(p))
+        srcs.append(str(p))
+    dst = tmp_path / 'out.glb'
+    combine_parts.combine(str(dst), srcs, up='z')
+    for ext in glb_extents(str(dst)):
+        assert ext == pytest.approx([0.4, 1.0, 0.3], abs=1e-5)
+
+
+def test_出来上がるまで出力先に前回のものを残さない(tmp_path, imgs, rec, monkeypatch):
+    # ★途中で落ちたとき、前回の成果物が「今回の結果」に見えてしまう
+    import combine_parts
+    out = tmp_path / 'final.glb'
+    out.write_text('前回のもの')
+
+    def boom(dst, parts, up='z'):
+        raise RuntimeError('結合で落ちた')
+
+    monkeypatch.setattr(combine_parts, 'combine', boom)
+    with pytest.raises(RuntimeError):
+        make_parts.main(base_argv(tmp_path, imgs))
+    assert out.read_text() == '前回のもの'      # 触っていない
+
+
+def test_成功したら置き換わる(tmp_path, imgs, rec):
+    out = tmp_path / 'final.glb'
+    out.write_text('前回のもの')
+    make_parts.main(base_argv(tmp_path, imgs))
+    assert out.read_text() != '前回のもの'
+
+
+# ---- 首の切り口を動かさない -----------------------------------------------
+
+def test_ならしても切り口は動かない(tmp_path):
+    # ★体はならさないので、動かすと頭と体の切り口が合わなくなる。
+    #   実測（2026-08-31）では z が +0.00803 動き、頭の下端が体の上端を上回った
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import smooth_part
+    m = trimesh.creation.icosphere(subdivisions=3)
+    v = np.asarray(m.vertices, float)
+    keep = np.asarray(m.faces)[v[np.asarray(m.faces)].mean(axis=1)[:, 2] > -0.5]
+    uniq, inv = np.unique(keep.reshape(-1), return_inverse=True)
+    cut = trimesh.Trimesh(vertices=v[uniq], faces=inv.reshape(-1, 3), process=False)
+    src, dst = tmp_path / 'a.glb', tmp_path / 'b.glb'
+    cut.export(str(src))
+    before = np.asarray(trimesh.load(str(src), force='mesh', process=False).vertices, float)
+    info = smooth_part.smooth(str(src), str(dst), iters=8, lam=0.5)
+    after = np.asarray(trimesh.load(str(dst), force='mesh', process=False).vertices, float)
+    rim = smooth_part.boundary_vertices(cut)
+    assert len(rim) > 0, '切り口が見つからない'
+    assert info['pinned'] == len(rim)
+    assert np.allclose(before[rim], after[rim]), '切り口が動いた'
+    assert not np.allclose(before, after), '何もならしていない'
+
+
+def test_固定しない指定もできる(tmp_path):
+    np = pytest.importorskip('numpy')
+    trimesh = pytest.importorskip('trimesh')
+    import smooth_part
+    m = trimesh.creation.box()
+    src, dst = tmp_path / 'a.glb', tmp_path / 'b.glb'
+    m.export(str(src))
+    assert smooth_part.smooth(str(src), str(dst), pin_boundary=False)['pinned'] == 0
+
+
+def test_閉じたメッシュには切り口が無い():
+    trimesh = pytest.importorskip('trimesh')
+    import smooth_part
+    assert len(smooth_part.boundary_vertices(trimesh.creation.box())) == 0

@@ -74,7 +74,9 @@ def load_mesh_as_yup(path, up=None):
     ★上方向は書き出し経路で変わる（to_glb経由=Y上 / trimesh直=Z上）ので
       決め打ちしない。up に 'y' / 'z' を渡せばそれに従う。
     """
-    m = trimesh.load(path, force='mesh')
+    # ★process=False。UV 付きのメッシュを読む唯一の場所なので、
+    #   頂点の併合で UV シームが潰れないようにする
+    m = trimesh.load(path, force='mesh', process=False)
     v = np.asarray(m.vertices, dtype=np.float64)
     if up is None:
         up = detect_up(v)

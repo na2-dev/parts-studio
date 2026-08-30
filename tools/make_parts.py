@@ -41,13 +41,25 @@ PARTS = (
     {'name': 'body', 'label': '体', 'smooth': False},
 )
 
-# ★視点の対応づけは【全パーツで固定する】（2026-08-31）。
-#   front→front / right→left / back→back / left→right という並びは
-#   座標の規約から決まるもので、題材によらない。
-#   シルエットで測って決める自動割り当ては、それを毎回引き直しているだけで、
-#   外すことがある（頭で正面を後ろに割り当てた実測がある）。
-#   上方向を直したあと体で測り直したら、自動でも【この並びと完全に一致】した。
-#   規約が正なので、毎回引き直さずに使う。
+# ★視点の対応づけは既定で固定する（--no-fixviews で外せる）。
+#
+#   固定の並び（apply_reference_detail.FIXED）:
+#       front→front / right→left / back→back / left→right
+#
+#   ★これは【この題材で確かめただけ】である。座標の規約から導いたものではない。
+#     project_detail.assign_views の記録は、左右の入れ替わりを
+#     「このデータでは入れ替わっていました」＝データ固有の性質として書いている。
+#     別の題材では素直に left→left かもしれない。
+#
+#   それでも既定を固定にするのは、自動割り当てが外すのを実測しているため
+#   （頭で正面を後ろに割り当てた）。上方向を直したあと体で測り直したら
+#   自動でも固定と一致したので、この題材については両者が合っている。
+#
+#   ★代償: --partof を渡すと fixfit=True が立ち、project_detail の
+#     「一致が minshape 未満なら使わない」関門も外れる。つまり
+#     【絵とメッシュが噛み合っているかを見る仕組みが2つとも切れる】。
+#     別の題材を通すとき（#6）は --no-fixviews で自動割り当ての言い分を
+#     必ず見ること。
 FIXVIEWS = True
 
 
@@ -70,8 +82,10 @@ def parse_args(argv=None):
                    help='首から上へどれだけ余分に頭へ含めるか（全体の高さに対する割合）')
     p.add_argument('--smooth-iters', type=int, default=8, help='ならしの回数')
     p.add_argument('--smooth-lambda', type=float, default=0.5, help='ならしの強さ')
-    p.add_argument('--keep-work', action='store_true',
-                   help='途中のファイルを残す（既定でも消さないが、明示用）')
+    p.add_argument('--no-fixviews', action='store_true',
+                   help='視点の対応づけを固定せず、シルエットで測って決める。'
+                        '★別の題材を通すときは一度これで確かめること'
+                        '（固定の並びはこの題材で確かめただけ）')
     p.add_argument('--up', choices=['y', 'z'], default=None,
                    help='全身の上方向。既定は全身から測る。'
                         '★パーツからは測れない（背が低く一番長い軸が横になる）')
@@ -84,6 +98,9 @@ def parse_args(argv=None):
         p.error('--smooth-iters は 0 以上にすること')
     if not 0.0 <= a.smooth_lambda <= 1.0:
         p.error('--smooth-lambda は 0〜1 にすること')
+    # ★大きすぎると切る高さが頭のてっぺんを超え、ほぼ空のメッシュを 47 秒かけて塗る
+    if not -0.5 < a.margin < 0.5:
+        p.error(f'--margin は -0.5〜0.5 にすること。受け取った値: {a.margin}')
     return a
 
 
@@ -118,11 +135,15 @@ def part_paths(work, name):
     }
 
 
-def split(shape, work, margin):
-    """首で切って、頭と体の glb を作る。"""
+def split(shape, work, margin, up):
+    """首で切って、頭と体の glb を作る。★上方向を渡す。
+
+    渡さないと split_parts が「一番長い軸が上」で決め直す。腕を広げた題材で
+    横幅が背丈を超えると、腕に沿って首を探して「頭＝片腕と胴の右半分」になる。
+    """
     import split_parts
     paths = {p['name']: part_paths(work, p['name']) for p in PARTS}
-    split_parts.split(shape, paths['head']['raw'], paths['body']['raw'], margin)
+    split_parts.split(shape, paths['head']['raw'], paths['body']['raw'], margin, up)
     for name, ps in paths.items():
         if not os.path.isfile(ps['raw']):
             raise SystemExit(f'{name} が作られませんでした: {ps["raw"]}')
@@ -144,11 +165,15 @@ def prepare_shape(part, paths, args):
     return dst
 
 
-def paint(part, paths, args):
+def paint(part, paths, args, up):
     """パーツを塗る。塗り環境は別プロセスで動く。"""
     import make_texture
+    # ★--up を必ず渡す。渡さないと塗りだけ既定（z）で動き、Y上の形を
+    #   もう一度倒して塗ることになる。形は往復して戻るので幾何は正しく見え、
+    #   テクスチャだけが壊れる（顔が頭の裏側に付く）
     argv = ['--mesh', paths['shape'], '--front', args.front,
-            '--out', paths['painted'], '--texsize', str(args.texsize)]
+            '--out', paths['painted'], '--texsize', str(args.texsize),
+            '--up', up]
     if args.paint_root:
         argv += ['--paint-root', args.paint_root]
     make_texture.main(argv)
@@ -171,14 +196,14 @@ def detect_up(shape):
     return up
 
 
-def project(part, paths, images, shape, up):
+def project(part, paths, images, shape, up, fixviews=FIXVIEWS):
     """元の絵の細部を貼り直す。★切る前の全身と、その上方向を渡す。"""
     import apply_reference_detail
     apply_reference_detail.project(
         paths['painted'], paths['final'], images,
         partof=shape,                      # ★これが無いと1画素も貼れない
         up=up,                             # ★切り出し元の上方向を引き継ぐ
-        fixviews=FIXVIEWS)
+        fixviews=fixviews)
     return paths['final']
 
 
@@ -198,7 +223,7 @@ def main(argv=None):
 
     print('1) 首で切る', flush=True)
     up = args.up or detect_up(shape)
-    paths = split(shape, work, args.margin)
+    paths = split(shape, work, args.margin, up)
 
     print('2) 塗る前の形を作る', flush=True)
     for part in PARTS:
@@ -208,17 +233,25 @@ def main(argv=None):
     for part in PARTS:
         ps = paths[part['name']]
         print(f'3) {part["label"]}を塗る', flush=True)
-        paint(part, ps, args)
+        paint(part, ps, args, up)
         if args.skip_project:
             made.append(ps['painted'])
             continue
         print(f'4) {part["label"]}に元の絵を投影する', flush=True)
-        project(part, ps, images, shape, up)
+        project(part, ps, images, shape, up, not args.no_fixviews)
         made.append(ps['final'])
 
     print('5) 結合する', flush=True)
     import combine_parts
-    combine_parts.combine(args.out, made, up)     # ★ここで glTF の向きに直す
+    # ★出来上がるまで --out には何も置かない。途中で落ちたときに
+    #   前回の成果物や書きかけの glb を「今回の結果」として掴ませないため
+    #   （paint_backend が同じ作法を採っている）
+    out = os.path.abspath(args.out)
+    work_out = os.path.join(work, '_combined.glb')
+    combine_parts.combine(work_out, made, up)     # ★ここで glTF の向きに直す
+    if os.path.isfile(out):
+        os.remove(out)
+    os.replace(work_out, out)
     print(f'できました: {args.out}（{time.time() - t0:.0f}秒）', flush=True)
     return 0
 
