@@ -20,6 +20,8 @@ import trimesh
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# ★experiments/ へ移したので、依存している道具は tools/ 側にある
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'tools'))
 sys.path.insert(0, HERE)
 import silhouette_iou as S                                  # noqa: E402
 from project_texture import arg, project, to_pixel          # noqa: E402

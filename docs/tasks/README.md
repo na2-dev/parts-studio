@@ -36,7 +36,7 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 | A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | ⏸ | A-2〜A-5 |
 | A-7 | [#6](https://github.com/na2-dev/parts-studio/issues/6) | 別の題材で通して、過適合を確かめる | — | ⏸ | A-6 |
 
-**A-3 は完了済み**: `tools/remesh_blender.py` は QuadriFlow が通らず使えなかったが、
+**A-3 は完了済み**: `experiments/remesh_blender.py` は QuadriFlow が通らず使えなかったが、
 `tools/retopo_shrinkwrap.py` が「ボクセル化 → 元表面へスナップ」を 1 コマンドで行う。
 
 **A-4 の注意**: いま塗りは `Z:\work\3d-studio` の `venv-21` を借りている。
@@ -91,13 +91,10 @@ parts-studio 単体で動く形にするか、借りることを正式な前提�
 
 ## 実験のまま残っているもの
 
-リポジトリにコードはあるが、本線では使っていないもの。捨てるか残すかを決める必要がある。
+本線で使っていないコードは **[`experiments/`](../../experiments/README.md) に隔離した**。
+なぜ使わなかったかと、当時の実測ドキュメントへのリンクをそこに置いてある。
 
-| 対象 | 由来 | 現状 |
+| 対象 | 由来 | 場所 |
 |---|---|---|
-| `tools/bake_to_uv.py` | ADR-0002 | 🧪 xatlas 展開＋自前焼き込み。本線では Hunyuan-Paint が UV を張るので使っていない |
-| `tools/crop_ref_for_part.py` | — | 🧪 パーツ用の絵の切り出し。`--partof` の方式に置き換わり不要になった |
-| `tools/retopo_quad.py` | ADR-0007 | 🧪 QuadriFlow を試したもの。多様体でないと拒否されるため使っていない |
-| `tools/vox_only.py` | ADR-0007 | 🧪 ボクセルリメッシュ単体。`retopo_shrinkwrap.py` に取り込み済み |
-| `tools/remesh_blender.py` | ADR-0007 | 🧪 3d-studio から移植。QuadriFlow が通らず使っていない |
-| ADR-0006 の視点別合成 | ADR-0006 | 🧪 ADR-0008 に置き換わった。ボクセル場のプレビュー用としてのみ意味がある |
+| `bake_to_uv.py` / `crop_ref_for_part.py` / `retopo_quad.py` / `vox_only.py` / `remesh_blender.py` | ADR-0002 / ADR-0007 | [`experiments/`](../../experiments/README.md) |
+| ADR-0006 の視点別合成 | ADR-0006 | コードは Windows 機の `TRELLIS.2/gen_blend.py`（リポジトリ外）。ADR-0008 に置き換わった |
