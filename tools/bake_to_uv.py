@@ -94,3 +94,114 @@ def unwrap(vertices, faces, texture_size=2048, max_cost=8.0, max_iterations=4,
     at.generate(chart_options=co, pack_options=po)
     vmap, idx, uvs = at[0]
     return vmap, idx, uvs
+
+
+# ---------------------------------------------------------------------------
+# 視点そろえの UV 展開
+#
+# ★なぜこれを試すのか（2026-08-30）
+#   自動展開は「これは頭」「これは腕」と分かっていないので、歪みの閾値だけで
+#   切り刻む。結果 512チャートになった。一方こちらの入力は最初から4方向の絵で、
+#   面ごとの視点の重みは ADR-0006 で既に計算している。
+#   よく見えている面をその視点へ平面投影すれば、チャートは4枚で済み、
+#   しかも【アトラスが元の絵と1対1で対応する】。
+#   元絵の貼り直しに位置合わせが要らなくなるのが最大の利点。
+#
+#   どの視点からも斜めにしか見えない面は歪むので、そこだけ xatlas に回す。
+VIEW_DIRS = {
+    'front': (0.0, -1.0, 0.0),
+    'back':  (0.0,  1.0, 0.0),
+    'left':  (1.0,  0.0, 0.0),
+    'right': (-1.0, 0.0, 0.0),
+}
+# 各視点でのアトラス上の平面座標の取り方（法線方向を落として2軸を残す）
+VIEW_AXES = {
+    'front': (0, 2, +1, +1),   # x, z
+    'back':  (0, 2, -1, +1),
+    'left':  (1, 2, -1, +1),   # y, z
+    'right': (1, 2, +1, +1),
+}
+
+
+def unwrap_view_aligned(vertices, faces, views=('front', 'left', 'right', 'back'),
+                        min_facing=0.5, texture_size=2048, margin=0.01):
+    """よく見えている面を視点ごとの平面へ投影し、残りは xatlas に回す。
+
+    返り値: (new_vertices, new_faces, uvs, info)
+      info['view_faces'] … 視点ごとの面数
+      info['residual']   … xatlas に回した面数
+    """
+    import xatlas
+    V = np.asarray(vertices, dtype=np.float64)
+    F = np.asarray(faces, dtype=np.int64)
+    # 面法線
+    p0, p1, p2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    n = np.cross(p1 - p0, p2 - p0)
+    ln = np.linalg.norm(n, axis=1, keepdims=True)
+    n = n / np.maximum(ln, 1e-12)
+    # 外向きに揃える（重心からの向きで判定）
+    c = (p0 + p1 + p2) / 3.0
+    cn = c / np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
+    n *= np.sign((n * cn).sum(1, keepdims=True) + 1e-12)
+
+    dirs = np.array([VIEW_DIRS[v] for v in views])
+    facing = n @ dirs.T                       # (F, V)
+    best = facing.argmax(1)
+    bestval = facing.max(1)
+    assigned = bestval >= min_facing
+
+    # 視点ごとにグリッドを割り当てる（2x2 で4視点）
+    cols = int(np.ceil(np.sqrt(len(views) + 1)))
+    cell = 1.0 / cols
+    new_v, new_f, new_uv = [], [], []
+    info = {'view_faces': {}, 'residual': 0}
+    vcount = 0
+    for vi, vname in enumerate(views):
+        sel = assigned & (best == vi)
+        info['view_faces'][vname] = int(sel.sum())
+        if not sel.any():
+            continue
+        ax0, ax1, s0, s1 = VIEW_AXES[vname]
+        fs = F[sel]
+        # ★頂点は視点グループ内で溶接する。面ごとに複製すると
+        #   隣り合う面が頂点を共有せず、1面=1チャートになってしまう。
+        uniq, inv = np.unique(fs.reshape(-1), return_inverse=True)
+        verts = V[uniq]
+        uu = verts[:, ax0] * s0
+        vv = verts[:, ax1] * s1
+        u0, u1 = uu.min(), uu.max()
+        v0, v1 = vv.min(), vv.max()
+        sc = (1 - 2 * margin) / max(u1 - u0, v1 - v0, 1e-9)
+        uu = (uu - u0) * sc + margin
+        vv = (vv - v0) * sc + margin
+        r, cc = divmod(vi, cols)
+        uu = uu * cell + cc * cell
+        vv = vv * cell + r * cell
+        new_v.append(verts)
+        new_uv.append(np.stack([uu, vv], 1))
+        new_f.append(inv.reshape(-1, 3) + vcount)
+        vcount += len(uniq)
+
+    # 残りは xatlas へ（最後のセルに詰める）
+    rest = ~assigned
+    info['residual'] = int(rest.sum())
+    if rest.any():
+        fs = F[rest]
+        uniq, inv = np.unique(fs.reshape(-1), return_inverse=True)
+        at = xatlas.Atlas()
+        at.add_mesh(V[uniq].astype(np.float32), inv.reshape(-1, 3).astype(np.uint32))
+        co = xatlas.ChartOptions(); co.max_cost = 8.0; co.max_iterations = 4
+        po = xatlas.PackOptions(); po.resolution = texture_size; po.padding = 4
+        at.generate(chart_options=co, pack_options=po)
+        vmap, idx, uvs = at[0]
+        r, cc = divmod(len(views), cols)
+        uvs = uvs * cell + np.array([cc * cell, r * cell])
+        new_v.append(V[uniq][vmap])
+        new_uv.append(uvs)
+        new_f.append(idx.astype(np.int64) + vcount)
+        vcount += len(vmap)
+
+    return (np.concatenate(new_v).astype(np.float32),
+            np.concatenate(new_f).astype(np.int32),
+            np.concatenate(new_uv).astype(np.float32),
+            info)
