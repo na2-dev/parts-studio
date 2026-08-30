@@ -245,8 +245,48 @@ Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 30 | Format-List TimeCrea
 
 ---
 
+## 手順8: 出力の文字化けを直す（Windows 側・実施済み）
+
+既定のままだと PowerShell の出力が Shift-JIS で返り、Mac 側で日本語のエラーメッセージが
+読めなくなる。プロファイルで UTF-8 に固定する。
+
+`C:\Users\k2187\Documents\WindowsPowerShell\profile.ps1` に以下を置いた（**BOM なし**）:
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+Mac 側から置く場合:
+
+```sh
+printf '%s\r\n' '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8' \
+                '$OutputEncoding = [System.Text.Encoding]::UTF8' > /tmp/ps_profile.ps1
+ssh gpu 'New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\Documents\WindowsPowerShell" | Out-Null'
+scp /tmp/ps_profile.ps1 gpu:'C:/Users/k2187/Documents/WindowsPowerShell/profile.ps1'
+```
+
+---
+
+## 繋がった時点の環境（実測）
+
+```
+natsu / natsu\k2187 / PowerShell 5.1.26100.9278
+NVIDIA GeForce RTX 4070 Ti SUPER — 16376 MiB（起動時の使用 1229 MiB）/ ドライバ 610.88
+```
+
+| | 状態 |
+|---|---|
+| Python | 3.10 / 3.11 / 3.12 / 3.13 が導入済み。`python` は 3.10 を指す |
+| CUDA Toolkit（`nvcc`） | **未導入** |
+| conda | **未導入** |
+| git | 2.50.1.windows.1 |
+| ディスク | C: 空き 1105GB / Z: 空き 2638GB |
+| RAM | 31.1GB（調査時の空き 16.8GB） |
+
+ADR-0004 の方針（ビルド済みホイールを借りる）なら CUDA Toolkit は不要。上流が動作確認している
+**Python 3.11 ＋ Torch 2.7.0+cu128** の組み合わせがそのまま作れる。
+
 ## 現状
 
-- 手順1・2・3・5: 完了
-- 手順6（Mac 側 `~/.ssh/config`）: 完了
-- **手順4: 未通過。** sshd は応答し ポート22 も開いているが、`win.key` の提示が拒否される
+手順1〜8 すべて完了。Mac から `ssh gpu` で入れる。
