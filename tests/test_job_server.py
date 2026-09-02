@@ -773,6 +773,20 @@ def test_vendorは外へ出られない(served, tmp_path):
         assert code == 404, path
 
 
+def test_配る名前の取り出し():
+    # ★basename 頼みだと POSIX ではバックスラッシュを剥がさず、
+    #   Windows で立てたときだけ外へ出る OS 依存の穴になる。
+    #   関数に切り出して、どの OS のテストでも直接見る
+    ok = job_server.vendor_name
+    assert ok('model-viewer.min.js') == 'model-viewer.min.js'
+    assert ok(r'..\..\tools\x.js') == 'x.js'         # \ 区切りでも最後だけ
+    assert ok('../../web/x.js') == 'x.js'
+    assert ok('model-viewer.LICENSE') is None        # .js 以外は配らない
+    assert ok('.js') is None and ok('..js') is None
+    assert ok('a%5Cb.js') is None                    # デコードしない前提を崩す値
+    assert ok('a%2Fb.js') is None
+
+
 def test_UIはビューアを同梱から読む():
     # ★CDN を実行時に引かない（オフラインでも動く・供給元に左右されない）
     html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')

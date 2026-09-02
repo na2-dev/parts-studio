@@ -49,6 +49,8 @@ UI は相対パスで API を叩けばよく、CORS も接続先の設定も要�
 **実ブラウザで検証済み**（Chrome headless + puppeteer-core、偽のパイプラインを
 差した本物のサーバー相手）: 0〜3枚では押せない → 4枚で押せる → 投入 →
 running（工程の帯が進む）→ done → glb を受け取れる、コンソールエラーなし。
+3D ビューアも本物の glb で「3D で見る → 表示（loaded=true）→ もう一度押すと
+閉じる」まで確認している。
 
 ## API
 
@@ -60,6 +62,7 @@ running（工程の帯が進む）→ done → glb を受け取れる、コン�
 | `GET /jobs/<id>/log` | 実行ログそのまま |
 | `GET /jobs/<id>/result` | 出来上がりの glb（`done` になってから） |
 | `POST /jobs/<id>/cancel` | 取り消し。実行中ならプロセスを**子孫ごと**止める |
+| `GET /vendor/<name>.js` | 同梱の外部ファイル（3D ビューア）。`web/vendor/` の `.js` だけを配る |
 
 ### 投入の形
 

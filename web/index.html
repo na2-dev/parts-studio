@@ -280,6 +280,15 @@ function addJobCard(snap) {
       el.querySelector('.msg').textContent =
         '3D の表示に失敗しました。glb を受け取って Blender で確かめてください';
       el.querySelector('.msg').className = 'msg error';
+      mv.remove();                              // ★空の枠を残さない（開き直しが1回で済む）
+    });
+    mv.addEventListener('load', () => {
+      // ★前の失敗の赤字を消す。done 後は watch が終わっていて render が走らない
+      const msg = el.querySelector('.msg');
+      if (msg.classList.contains('error')) {
+        msg.textContent = 'できました';
+        msg.className = 'msg';
+      }
     });
     el.appendChild(mv);
   });
