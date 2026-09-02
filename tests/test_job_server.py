@@ -570,20 +570,14 @@ def test_取り消した待ちJobは後続が動いても走らない(served):
 
 # ---- CORS と経路（唯一の想定クライアントはブラウザ） ------------------------
 
-def test_CORSヘッダが付く(served):
+def test_CORSは開けない(served):
+    # ★UI は同一オリジンで配るので CORS は要らない。認証が無いので、
+    #   開けると利用者のブラウザで開いた任意のサイトが Job を読めて投入もできる
     base = served(FAKE_OK)
-    req = urllib.request.Request(base + '/jobs')
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.headers['Access-Control-Allow-Origin'] == '*'
-
-
-def test_事前確認OPTIONSに応える(served):
-    base = served(FAKE_OK)
-    req = urllib.request.Request(base + '/jobs', method='OPTIONS')
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.status == 204
-        assert 'POST' in r.headers['Access-Control-Allow-Methods']
-        assert r.headers['Access-Control-Allow-Headers'] == 'Content-Type'
+    for path in ('/', '/jobs'):
+        req = urllib.request.Request(base + path)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.headers.get('Access-Control-Allow-Origin') is None, path
 
 
 def test_クエリ文字列が付いても経路は同じ(served):
@@ -718,6 +712,30 @@ def test_UIは相対パスでAPIを叩く():
     html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
     assert 'http://127.0.0.1' not in html
     assert 'localhost' not in html
+
+
+def test_faviconは404にしない(served):
+    # ★404 のままだとコンソールにエラーが出て、本物の異常が埋もれる
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/favicon.ico')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 204
+
+
+def test_UIが無ければ404の理由を返す(served, monkeypatch):
+    base = served(FAKE_OK)
+    monkeypatch.setattr(job_server, 'UI',
+                        str(pathlib.Path(job_server.UI).parent / 'nai.html'))
+    code, body = call(base, '/')
+    assert code == 404
+    assert 'web/index.html' in body['error']
+
+
+def test_UIは投入のPOSTを持つ():
+    # ★「fetch('jobs'」だけだと一覧の GET にもマッチして、投入を消しても緑になる
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert "method: 'POST'" in html
+    assert 'JSON.stringify({ images, params' in html
 
 
 def test_UIは4Viewが揃うまで投入できない():

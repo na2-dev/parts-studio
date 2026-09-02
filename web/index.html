@@ -131,11 +131,17 @@ function setFile(view, file) {
     showError(`${LABEL[view]}: PNG を選んでください（${file.name}）`);
     return;
   }
+  if (file.size === 0) {
+    // ★空のままサーバーへ行くと「絵が足りません」になり、4枚置いたのにと混乱する
+    showError(`${LABEL[view]}: 中身が空です（${file.name}）`);
+    return;
+  }
   files[view] = file;
   box.classList.add('filled');
   box.querySelector('.hint').style.display = 'none';
   let img = box.querySelector('img');
   if (!img) { img = document.createElement('img'); box.appendChild(img); }
+  if (img.src) URL.revokeObjectURL(img.src);   // ★置き直しのたびに漏らさない
   img.src = URL.createObjectURL(file);
   showError('');
   refreshSubmit();
@@ -157,14 +163,30 @@ function showError(text) {
 // ---- 投入 -------------------------------------------------------------------
 function collectParams() {
   const p = {};
-  const res = document.getElementById('p_res').value;
-  const seed = document.getElementById('p_seed').value;
-  const tex = document.getElementById('p_texsize').value;
-  if (res) p.res = Number(res);
-  if (seed) p.seed = Number(seed);
-  if (tex) p.texsize = Number(tex);
+  for (const [id, key] of [['p_res', 'res'], ['p_seed', 'seed'], ['p_texsize', 'texsize']]) {
+    const input = document.getElementById(id);
+    if (input.validity.badInput) {
+      // ★数値欄に文字を打つと value は '' になる。黙って既定値で走らせない
+      throw new Error('設定に数値でないものがあります');
+    }
+    if (input.value) p[key] = Number(input.value);
+  }
   if (document.getElementById('p_nofix').checked) p.no_fixviews = true;
   return p;
+}
+
+function clearFiles() {
+  // ★投入に成功したら受け口を空にする。残したままだと連打で
+  //   400 秒級の同じ Job が何本も積める
+  for (const v of VIEWS) {
+    delete files[v];
+    const box = document.getElementById('view-' + v);
+    box.classList.remove('filled');
+    box.querySelector('.hint').style.display = '';
+    const img = box.querySelector('img');
+    if (img) { URL.revokeObjectURL(img.src); img.remove(); }
+    box.querySelector('input').value = '';
+  }
 }
 
 function toBase64(file) {
@@ -192,6 +214,7 @@ document.getElementById('submit').addEventListener('click', async () => {
     if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
     addJobCard(body);
     watch(body.id);
+    clearFiles();
   } catch (e) {
     showError('投入できませんでした: ' + e.message);
   } finally {
@@ -202,6 +225,9 @@ document.getElementById('submit').addEventListener('click', async () => {
 
 // ---- Job の表示 ---------------------------------------------------------------
 function addJobCard(snap) {
+  // ★同じ Job のカードを2枚作らない（立ち上げ時の一覧と投入直後が競合しうる。
+  //   2枚目は getElementById の先勝ちで永久に更新されない）
+  if (document.getElementById('job-' + snap.id)) return render(snap);
   document.getElementById('empty')?.remove();
   const el = document.createElement('div');
   el.className = 'job';
@@ -220,7 +246,16 @@ function addJobCard(snap) {
     <div class="msg"></div>
     <pre class="log"></pre>`;
   el.querySelector('.cancel').addEventListener('click', async () => {
-    await fetch(`jobs/${snap.id}/cancel`, { method: 'POST' });
+    // ★投げっぱなしにしない。失敗（409 やサーバー停止）が無反応になる
+    try {
+      const r = await fetch(`jobs/${snap.id}/cancel`, { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json();
+        el.querySelector('.msg').textContent = '取り消せません: ' + body.error;
+      }
+    } catch (e) {
+      el.querySelector('.msg').textContent = '取り消しが届きません: ' + e.message;
+    }
   });
   el.querySelector('.logbtn').addEventListener('click', async () => {
     const pre = el.querySelector('.log');
@@ -259,13 +294,26 @@ function render(snap) {
 async function watch(id) {
   // ★2秒ごとの見に行き。終わったらやめる（無限にポーリングしない）
   for (;;) {
-    let snap;
+    let snap, ok;
     try {
       const r = await fetch(`jobs/${id}?t=${Date.now()}`);
+      ok = r.ok;
       snap = await r.json();
     } catch {
       await sleep(5000);                       // サーバーが一瞬いなくても諦めない
       continue;
+    }
+    if (!ok) {
+      // ★404 のまま回り続けない。サーバーを立て直すと前の Job は消える
+      const el = document.getElementById('job-' + id);
+      if (el) {
+        const msg = el.querySelector('.msg');
+        msg.textContent = 'サーバーがこの Job を覚えていません（立て直した？）: '
+          + (snap.error || '');
+        msg.className = 'msg error';
+        el.querySelector('.cancel').hidden = true;
+      }
+      return;
     }
     render(snap);
     if (['done', 'failed', 'canceled'].includes(snap.state)) return;

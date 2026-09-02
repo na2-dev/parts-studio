@@ -377,7 +377,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
@@ -392,13 +391,6 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in self.path.split('?')[0].split('/') if p]
         return parts
 
-    def do_OPTIONS(self):                   # ブラウザの事前確認（CORS）
-        self.send_response(204)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
     def do_GET(self):
         parts = self.parse_path()
         if parts == ['favicon.ico']:
@@ -409,7 +401,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not parts:
             # ★UI もこのサーバーが配る。同一オリジンになり、UI は相対パスで
-            #   API を叩けばよく、CORS も接続先の設定も要らない
+            #   API を叩けばよく、CORS も接続先の設定も要らない。
+            #   ★CORS は開けない。認証が無いので、開けると利用者のブラウザで
+            #     開いた任意のサイトが Job の一覧・結果を読めて投入もできてしまう
             return self.send_file(UI, 'text/html; charset=utf-8',
                                   'UI が見つかりません（web/index.html）')
         if parts == ['jobs']:
@@ -438,7 +432,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
