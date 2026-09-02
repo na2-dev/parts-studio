@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<!-- parts-studio のブラウザ UI（B-2）。
+     ★ビルド不要の単一ファイル。ジョブサーバー（tools/job_server.py）が配る。
+     ブラウザは推論しない（ADR-0001）。Job を投げて進み具合を見るだけ。 -->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>parts-studio</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #1f232b; --line: #333a46; --text: #e8eaf0;
+    --dim: #9aa3b2; --accent: #4c8dff; --ok: #3fb26f; --bad: #e05a5a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 14px; margin: 0 0 12px; color: var(--dim); font-weight: 600; }
+
+  .views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .view { border: 2px dashed var(--line); border-radius: 8px; padding: 8px;
+          text-align: center; cursor: pointer; position: relative; min-height: 130px; }
+  .view.over { border-color: var(--accent); }
+  .view.filled { border-style: solid; border-color: var(--ok); }
+  .view .name { font-size: 12px; color: var(--dim); }
+  .view img { max-width: 100%; max-height: 90px; margin-top: 6px; }
+  .view .hint { font-size: 11px; color: var(--dim); margin-top: 24px; }
+  .view input { display: none; }
+
+  details { margin-top: 12px; color: var(--dim); font-size: 13px; }
+  details label { display: inline-block; margin: 4px 12px 4px 0; }
+  details input { width: 90px; background: var(--bg); color: var(--text);
+                  border: 1px solid var(--line); border-radius: 4px; padding: 4px; }
+
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+           padding: 10px 22px; font-size: 15px; cursor: pointer; }
+  button:disabled { background: var(--line); color: var(--dim); cursor: not-allowed; }
+  button.minor { background: transparent; border: 1px solid var(--line);
+                 color: var(--dim); padding: 4px 10px; font-size: 12px; }
+  .actions { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+  #formError { color: var(--bad); font-size: 13px; }
+
+  .steps { display: flex; gap: 6px; margin: 10px 0; }
+  .step { flex: 1; text-align: center; font-size: 12px; color: var(--dim);
+          border-top: 3px solid var(--line); padding-top: 6px; }
+  .step.now { color: var(--text); border-color: var(--accent); }
+  .step.past { border-color: var(--ok); }
+
+  .job { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .job .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .job .id { font-family: ui-monospace, monospace; font-size: 12px; color: var(--dim); }
+  .badge { font-size: 12px; padding: 2px 10px; border-radius: 10px; background: var(--line); }
+  .badge.running { background: #2b4a80; }
+  .badge.done { background: #23543a; }
+  .badge.failed, .badge.canceled { background: #6b2f2f; }
+  .msg { font-size: 13px; margin-top: 6px; }
+  .msg.error { color: var(--bad); }
+  a.dl { color: #8fc1ff; font-size: 13px; }
+  pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+            padding: 8px; font-size: 11px; max-height: 180px; overflow: auto;
+            white-space: pre-wrap; display: none; }
+  pre.log.show { display: block; }
+</style>
+</head>
+<body>
+<main>
+  <h1>parts-studio</h1>
+  <div class="sub">4 枚の絵から 3D モデル（glb）を作る。生成はこの PC の GPU で走る。</div>
+
+  <section>
+    <h2>1. 絵を 4 枚そろえる（背景ぬき済みの透過 PNG）</h2>
+    <div class="views" id="views"></div>
+    <details>
+      <summary>細かい設定（普段は触らない）</summary>
+      <label>解像度 <input id="p_res" type="number" placeholder="1024"></label>
+      <label>種 <input id="p_seed" type="number" placeholder="1234"></label>
+      <label>テクスチャの器 <input id="p_texsize" type="number" placeholder="4096"></label>
+      <label><input id="p_nofix" type="checkbox" style="width:auto">
+        視点の対応づけを固定しない（別の題材を試すとき）</label>
+    </details>
+    <div class="actions">
+      <button id="submit" disabled>作る</button>
+      <span id="formError"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Job</h2>
+    <div id="jobs"><span class="sub" id="empty">まだありません。</span></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+const VIEWS = ['front', 'left', 'right', 'back'];
+const LABEL = { front: '正面', left: '左', right: '右', back: '後ろ' };
+const STEPS = [['shape', '形'], ['retopo', 'リトポロジー'], ['parts', 'パーツ塗り']];
+const files = {};                 // view -> File
+
+// ---- 絵の受け口 ------------------------------------------------------------
+const viewsEl = document.getElementById('views');
+for (const v of VIEWS) {
+  const box = document.createElement('label');
+  box.className = 'view';
+  box.id = 'view-' + v;
+  box.innerHTML = `<span class="name">${LABEL[v]}（${v}）</span>
+    <div class="hint">クリックかドロップ</div>
+    <input type="file" accept="image/png" data-view="${v}">`;
+  box.addEventListener('dragover', e => { e.preventDefault(); box.classList.add('over'); });
+  box.addEventListener('dragleave', () => box.classList.remove('over'));
+  box.addEventListener('drop', e => {
+    e.preventDefault(); box.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f) setFile(v, f);
+  });
+  box.querySelector('input').addEventListener('change', e => {
+    if (e.target.files[0]) setFile(v, e.target.files[0]);
+  });
+  viewsEl.appendChild(box);
+}
+
+function setFile(view, file) {
+  const box = document.getElementById('view-' + view);
+  // ★PNG 以外はここで断る。サーバーも弾くが、投げる前に分かるほうが親切
+  if (!file.name.toLowerCase().endsWith('.png') && file.type !== 'image/png') {
+    showError(`${LABEL[view]}: PNG を選んでください（${file.name}）`);
+    return;
+  }
+  files[view] = file;
+  box.classList.add('filled');
+  box.querySelector('.hint').style.display = 'none';
+  let img = box.querySelector('img');
+  if (!img) { img = document.createElement('img'); box.appendChild(img); }
+  img.src = URL.createObjectURL(file);
+  showError('');
+  refreshSubmit();
+}
+
+function refreshSubmit() {
+  // ★4 View すべてが揃ってはじめて Job が成立する（CONTEXT.md）
+  const missing = VIEWS.filter(v => !files[v]);
+  const btn = document.getElementById('submit');
+  btn.disabled = missing.length > 0;
+  btn.textContent = missing.length
+    ? `作る（あと ${missing.length} 枚）` : '作る';
+}
+
+function showError(text) {
+  document.getElementById('formError').textContent = text;
+}
+
+// ---- 投入 -------------------------------------------------------------------
+function collectParams() {
+  const p = {};
+  const res = document.getElementById('p_res').value;
+  const seed = document.getElementById('p_seed').value;
+  const tex = document.getElementById('p_texsize').value;
+  if (res) p.res = Number(res);
+  if (seed) p.seed = Number(seed);
+  if (tex) p.texsize = Number(tex);
+  if (document.getElementById('p_nofix').checked) p.no_fixviews = true;
+  return p;
+}
+
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',', 2)[1]);   // data:...;base64, を剥がす
+    r.onerror = () => reject(new Error(file.name + ' が読めません'));
+    r.readAsDataURL(file);
+  });
+}
+
+document.getElementById('submit').addEventListener('click', async () => {
+  const btn = document.getElementById('submit');
+  btn.disabled = true;
+  btn.textContent = '投入しています…';
+  try {
+    const images = {};
+    for (const v of VIEWS) images[v] = await toBase64(files[v]);
+    const r = await fetch('jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ images, params: collectParams() }),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    addJobCard(body);
+    watch(body.id);
+  } catch (e) {
+    showError('投入できませんでした: ' + e.message);
+  } finally {
+    btn.textContent = '作る';
+    refreshSubmit();
+  }
+});
+
+// ---- Job の表示 ---------------------------------------------------------------
+function addJobCard(snap) {
+  document.getElementById('empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'job';
+  el.id = 'job-' + snap.id;
+  el.innerHTML = `
+    <div class="head">
+      <span class="id">${snap.id}</span>
+      <span style="flex:1"></span>
+      <a class="dl" hidden download="model.glb">glb を受け取る</a>
+      <button class="minor logbtn">ログ</button>
+      <button class="minor cancel">取り消す</button>
+      <span class="badge"></span>
+    </div>
+    <div class="steps">${STEPS.map(([k, label]) =>
+      `<div class="step" data-step="${k}">${label}</div>`).join('')}</div>
+    <div class="msg"></div>
+    <pre class="log"></pre>`;
+  el.querySelector('.cancel').addEventListener('click', async () => {
+    await fetch(`jobs/${snap.id}/cancel`, { method: 'POST' });
+  });
+  el.querySelector('.logbtn').addEventListener('click', async () => {
+    const pre = el.querySelector('.log');
+    pre.classList.toggle('show');
+    if (pre.classList.contains('show')) {
+      const r = await fetch(`jobs/${snap.id}/log`);
+      pre.textContent = r.ok ? await r.text() : 'ログはまだありません';
+      pre.scrollTop = pre.scrollHeight;
+    }
+  });
+  document.getElementById('jobs').prepend(el);
+  render(snap);
+}
+
+function render(snap) {
+  const el = document.getElementById('job-' + snap.id);
+  if (!el) return;
+  const badge = el.querySelector('.badge');
+  badge.textContent = snap.state;
+  badge.className = 'badge ' + snap.state;
+  const msg = el.querySelector('.msg');
+  msg.textContent = snap.error ? `${snap.message}: ${snap.error}` : snap.message;
+  msg.className = 'msg' + (snap.error ? ' error' : '');
+  const order = STEPS.map(([k]) => k);
+  const nowIdx = snap.state === 'done' ? order.length : order.indexOf(snap.step);
+  el.querySelectorAll('.step').forEach((s, i) => {
+    s.className = 'step' + (i === nowIdx ? ' now' : i < nowIdx ? ' past' : '');
+  });
+  const dl = el.querySelector('a.dl');
+  dl.hidden = !snap.has_result;
+  if (snap.has_result) dl.href = `jobs/${snap.id}/result`;
+  el.querySelector('.cancel').hidden =
+    ['done', 'failed', 'canceled'].includes(snap.state);
+}
+
+async function watch(id) {
+  // ★2秒ごとの見に行き。終わったらやめる（無限にポーリングしない）
+  for (;;) {
+    let snap;
+    try {
+      const r = await fetch(`jobs/${id}?t=${Date.now()}`);
+      snap = await r.json();
+    } catch {
+      await sleep(5000);                       // サーバーが一瞬いなくても諦めない
+      continue;
+    }
+    render(snap);
+    if (['done', 'failed', 'canceled'].includes(snap.state)) return;
+    await sleep(2000);
+  }
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---- 立ち上げ時: いままでの Job を出す ----------------------------------------
+(async () => {
+  try {
+    const r = await fetch('jobs');
+    const { jobs } = await r.json();
+    for (const snap of jobs) {                 // 古い順に来るので prepend で新しい順になる
+      addJobCard(snap);
+      if (!['done', 'failed', 'canceled'].includes(snap.state)) watch(snap.id);
+    }
+  } catch { /* サーバー無しで開いた場合は空のまま */ }
+})();
+
+refreshSubmit();
+</script>
+</body>
+</html>

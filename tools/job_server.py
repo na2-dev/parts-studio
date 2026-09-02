@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 VIEWS = ('front', 'left', 'right', 'back')
+UI = os.path.join(ROOT, 'web', 'index.html')     # ブラウザ UI（B-2）。単一ファイル
 STATES = ('queued', 'running', 'done', 'failed', 'canceled')
 PIPELINE = os.path.join(HERE, 'run_pipeline.py')
 
@@ -400,6 +401,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parts = self.parse_path()
+        if parts == ['favicon.ico']:
+            # ★ブラウザが勝手に取りに来る。404 のままだとコンソールに
+            #   エラーが出て、本物の異常が埋もれる
+            self.send_response(204)
+            self.end_headers()
+            return
+        if not parts:
+            # ★UI もこのサーバーが配る。同一オリジンになり、UI は相対パスで
+            #   API を叩けばよく、CORS も接続先の設定も要らない
+            return self.send_file(UI, 'text/html; charset=utf-8',
+                                  'UI が見つかりません（web/index.html）')
         if parts == ['jobs']:
             return self.send_json(200, {'jobs': self.server.store.list()})
         if len(parts) >= 2 and parts[0] == 'jobs':
@@ -499,8 +511,9 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     server = make_server(args.port, os.path.abspath(args.jobs))
-    print(f'ジョブサーバー: http://127.0.0.1:{args.port}/jobs '
+    print(f'ジョブサーバー: http://127.0.0.1:{args.port}/ '
           f'/ Job の置き場所 {args.jobs}', flush=True)
+    print('ブラウザでこの URL を開くと UI が出ます', flush=True)
     print('止めるには Ctrl-C', flush=True)
     try:
         server.serve_forever()

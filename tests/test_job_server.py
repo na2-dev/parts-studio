@@ -688,3 +688,33 @@ def test_読み取りが失敗しても子を見捨てない(tmp_path, monkeypat
     while pid_alive(pid) and time.time() - t0 < 10:
         time.sleep(0.1)
     assert not pid_alive(pid), '子が生き残っている（GPU が空かない）'
+
+
+# ---- ブラウザ UI（B-2）の配りかた --------------------------------------------
+
+def test_ルートでUIを配る(served):
+    # ★同一オリジンにする。UI は相対パスで API を叩けばよく、CORS も要らない
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200
+        assert r.headers['Content-Type'].startswith('text/html')
+        html = r.read().decode('utf-8')
+    assert 'parts-studio' in html
+    # ★View の枠は実行時に作るので、素の HTML には配列の定義があるはず
+    assert "['front', 'left', 'right', 'back']" in html
+    assert "fetch('jobs'" in html or 'fetch(`jobs' in html
+
+
+def test_UIは相対パスでAPIを叩く():
+    # ★絶対 URL や 127.0.0.1 を書くと、ポートフォワード越しに開いたとき壊れる
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'http://127.0.0.1' not in html
+    assert 'localhost' not in html
+
+
+def test_UIは4Viewが揃うまで投入できない():
+    # ★ボタンの disabled 制御が missing の数に紐づいている
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'btn.disabled = missing.length > 0' in html
+    assert '4 View すべてが揃ってはじめて' in html
