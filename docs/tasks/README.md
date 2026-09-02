@@ -76,6 +76,10 @@ A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreem
 
 ---
 
+**B-3 の状態（2026-09-03）**: 実装済み・PR 待ち。model-viewer を `web/vendor/` に
+同梱（Apache-2.0）。実ブラウザで「done → 3D で見る → glb が表示（loaded=true）→
+もう一度押すと閉じる」を検証済み。
+
 **B-2 の状態（2026-09-03）**: 実装済み・PR 待ち。UI はジョブサーバーが配る
 単一 HTML（`web/index.html`）。実ブラウザ（Chrome headless）で
 「4枚そろうまで押せない → 投入 → 進捗 → glb 受け取り」を検証済み。

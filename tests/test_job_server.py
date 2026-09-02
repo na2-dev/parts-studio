@@ -743,3 +743,50 @@ def test_UIは4Viewが揃うまで投入できない():
     html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
     assert 'btn.disabled = missing.length > 0' in html
     assert '4 View すべてが揃ってはじめて' in html
+
+
+# ---- 3D ビューア（B-3） -------------------------------------------------------
+
+def test_同梱のビューアを配る(served):
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/vendor/model-viewer.min.js')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200
+        assert r.headers['Content-Type'].startswith('text/javascript')
+        head = r.read(2048).decode('utf-8', errors='replace')
+    # ★先頭はライセンスの帯。実体の目印はそちらで見る
+    assert 'Copyright 2019 Google LLC' in head
+
+
+def test_vendorはjs以外を配らない(served):
+    base = served(FAKE_OK)
+    code, body = call(base, '/vendor/model-viewer.LICENSE')
+    assert code == 404
+
+
+def test_vendorは外へ出られない(served, tmp_path):
+    # ★.. で web/vendor の外のファイルを取らせない
+    base = served(FAKE_OK)
+    for path in ('/vendor/..%2F..%2Ftools%2Fjob_server.py',
+                 '/vendor/../index.html'):
+        code, body = call(base, path)
+        assert code == 404, path
+
+
+def test_UIはビューアを同梱から読む():
+    # ★CDN を実行時に引かない（オフラインでも動く・供給元に左右されない）
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'vendor/model-viewer.min.js' in html
+    assert 'unpkg.com' not in html and 'googleapis.com' not in html and 'cdn.' not in html
+
+
+def test_UIは出来上がるまで3Dボタンを出さない():
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert "el.querySelector('.viewbtn').hidden = !snap.has_result" in html
+
+
+def test_ビューアの実体が同梱されている():
+    p = pathlib.Path(job_server.VENDOR) / 'model-viewer.min.js'
+    assert p.is_file() and p.stat().st_size > 500_000
+    lic = pathlib.Path(job_server.VENDOR) / 'model-viewer.LICENSE'
+    assert lic.is_file() and 'Apache License' in lic.read_text(encoding='utf-8')

@@ -41,6 +41,7 @@ ROOT = os.path.dirname(HERE)
 
 VIEWS = ('front', 'left', 'right', 'back')
 UI = os.path.join(ROOT, 'web', 'index.html')     # ブラウザ UI（B-2）。単一ファイル
+VENDOR = os.path.join(ROOT, 'web', 'vendor')     # 同梱の外部ファイル（3D ビューア）
 STATES = ('queued', 'running', 'done', 'failed', 'canceled')
 PIPELINE = os.path.join(HERE, 'run_pipeline.py')
 
@@ -393,6 +394,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parts = self.parse_path()
+        if len(parts) == 2 and parts[0] == 'vendor':
+            # ★名前は basename に落とす（.. などで外へ出させない）。
+            #   置いてある .js だけを配る
+            name = os.path.basename(parts[1])
+            if not name.endswith('.js'):
+                return self.send_error_json(404, f'知らない経路です: {self.path}')
+            return self.send_file(os.path.join(VENDOR, name),
+                                  'text/javascript; charset=utf-8',
+                                  f'同梱ファイルがありません: {name}')
         if parts == ['favicon.ico']:
             # ★ブラウザが勝手に取りに来る。404 のままだとコンソールに
             #   エラーが出て、本物の異常が埋もれる

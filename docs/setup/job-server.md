@@ -33,12 +33,18 @@ UI は相対パスで API を叩けばよく、CORS も接続先の設定も要�
   （ボタンに「あと N 枚」と出る）
 - 投入すると Job カードが出て、工程の帯（形 → リトポロジー → パーツ塗り）が
   2 秒ごとに進む。`done` になったら「glb を受け取る」が出る
+- `done` になった Job は「**3D で見る**」でその場で回して見られる
+  （[model-viewer](https://www.npmjs.com/package/@google/model-viewer) を
+  `web/vendor/` に**同梱**して使う。実行時に CDN を引かない。
+  出どころと更新のしかたは [web/vendor/README.md](../../web/vendor/README.md)）
 - ログ・取り消しもカードから
 - ページを開き直しても、サーバーが覚えている Job は一覧に戻る
 
-| 実行中 | 出来上がり |
+| 実行中 | 出来上がり（3D で見る） |
 | :--- | :--- |
-| ![running](../measurements/images/2026-09-03-ui-running.png) | ![done](../measurements/images/2026-09-03-ui-done.png) |
+| ![running](../measurements/images/2026-09-03-ui-running.png) | ![viewer](../measurements/images/2026-09-03-ui-viewer.png) |
+
+（[done 直後の絵](../measurements/images/2026-09-03-ui-done.png)もある）
 
 **実ブラウザで検証済み**（Chrome headless + puppeteer-core、偽のパイプラインを
 差した本物のサーバー相手）: 0〜3枚では押せない → 4枚で押せる → 投入 →
