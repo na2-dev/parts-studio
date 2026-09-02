@@ -548,17 +548,24 @@ def test_取り消しの受け付けが応答から分かる(served):
 
 
 def test_取り消した待ちJobは後続が動いても走らない(served):
-    # ★sleep 頼みにしない。3つ目の Job が done になる＝Runner が
-    #   2つ目を確実に通過した、を合図にする
-    base = served(FAKE_OK)
+    # ★2つの競合を避ける。
+    #   1. sleep 頼みにしない（負荷の高い環境で空振り合格になる）
+    #   2. 先頭を速い Job にしない（cancel が届く前に b が走り出せてしまう。
+    #      Windows で実際に競合した）
+    #   遅い a で Runner を塞いだまま b を取り消し、a を取り消して流す。
+    #   c が running になる＝Runner が b を確実に通過した、を合図にする
+    base = served(FAKE_SLOW)
     _, a = call(base, '/jobs', good_request())
+    wait_state(base, a['id'], ('running',))     # Runner は a で塞がっている
     _, b = call(base, '/jobs', good_request())
     call(base, f'/jobs/{b["id"]}/cancel', method='POST')
     _, c = call(base, '/jobs', good_request())
-    wait_state(base, c['id'], ('done',))
+    call(base, f'/jobs/{a["id"]}/cancel', method='POST')
+    wait_state(base, c['id'], ('running',))     # b を通過した合図
     _, snap = call(base, f'/jobs/{b["id"]}')
     assert snap['state'] == 'canceled'
     assert snap['started'] is None, '取り消したのに走った'
+    call(base, f'/jobs/{c["id"]}/cancel', method='POST')
 
 
 # ---- CORS と経路（唯一の想定クライアントはブラウザ） ------------------------
