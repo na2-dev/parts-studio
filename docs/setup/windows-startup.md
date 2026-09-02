@@ -26,7 +26,7 @@
 
 ### PC を点けたら勝手に立つようにする（タスクスケジューラ）
 
-一度だけ、管理者でなくてよいので PowerShell で:
+一度だけ、PowerShell で（このユーザーの ssh セッションからは昇格なしで登録できた）:
 
 ```powershell
 schtasks /Create /F /TN parts-studio-server /SC ONSTART /RU <ユーザー名> `
@@ -36,8 +36,13 @@ schtasks /Create /F /TN parts-studio-server /SC ONSTART /RU <ユーザー名> `
 すぐ立てるなら `schtasks /Run /TN parts-studio-server`。
 やめるなら `schtasks /Delete /F /TN parts-studio-server`。
 
-**2026-09-03 に実機で登録・確認済み**（`/Run` → 別のセッションから
-`http://127.0.0.1:8787/jobs` が 200、ログも UTF-8 で出る）。
+**2026-09-03 に実機で確認したのは「登録」と「`/Run` で立つ」まで**
+（`/Run` → 別のセッションから `http://127.0.0.1:8787/jobs` が 200、
+ログも UTF-8 で出る）。**再起動で ONSTART が発火することは確認していない。**
+パスワードを保存しない登録（`/RP` なし）は「ログオン時のみ実行」の扱いに
+なることがあり、その場合は起動直後ではなくログオン後に立つ。
+再起動したら、まずブラウザで開いてみて、立っていなければ
+`schtasks /Run /TN parts-studio-server` を打つこと。
 
 ### ★ssh 越しに立てても、切ると死ぬ
 
@@ -61,8 +66,8 @@ ssh -N -L 8787:127.0.0.1:8787 gpu
 
 | したいこと / 症状 | やること |
 | :--- | :--- |
-| 止める | `taskkill /F /FI "IMAGENAME eq python.exe"`（★他の Python も落ちる。実行中の Job が無いのを UI で確かめてから） |
-| ポートが塞がっている | `netstat -ano | findstr :8787` で PID を見て `taskkill /F /PID <pid>` |
+| 止める | `taskkill /F /FI "IMAGENAME eq python.exe"`（★他の Python も全部落ちる。**UI が空でも安全とは限らない** — サーバーを立て直した直後は前の Job が UI から見えないため。`tasklist /FI "IMAGENAME eq python.exe"` で本数を見てから） |
+| ポートが塞がっている | `netstat -ano \| findstr :8787` で PID を見て `taskkill /F /PID <pid>` |
 | Job が `running` のまま固まって見える | サーバーを立て直した直後なら、前の Job は API から見えない（[job-server.md](job-server.md)）。`out\jobs\<id>\log.txt` を直接見る |
 | 形づくりで DINOv3 の 401 | HF の同意とトークン（`setx HF_TOKEN ...`）。[trellis2-windows.md](trellis2-windows.md) |
 | 塗りで「塗り環境が見つかりません」 | `Z:` がつながっているか。[paint-environment.md](paint-environment.md) |
@@ -73,8 +78,11 @@ ssh -N -L 8787:127.0.0.1:8787 gpu
 
 | 借りているもの | 出どころ | 対象 |
 | :--- | :--- | :--- |
-| `cumesh` / `o_voxel` / `flex_gemm` / `nvdiffrast` / `nvdiffrec_render` | [visualbruno/ComfyUI-Trellis2](https://github.com/visualbruno/ComfyUI-Trellis2) の `wheels/`（`_wheels/` に clone） | 形づくり（venv・cp311・Torch 2.7.0） |
+| `cumesh` / `o_voxel` / `flex_gemm` / `nvdiffrast` / `nvdiffrec_render` / `custom_rasterizer`（※） | [visualbruno/ComfyUI-Trellis2](https://github.com/visualbruno/ComfyUI-Trellis2) の `wheels/`（`_wheels/` に clone） | 形づくり（venv・cp311・torch 2.7.0+cu128） |
 | `custom_rasterizer` | [kijai/ComfyUI-Hunyuan3DWrapper](https://github.com/kijai/ComfyUI-Hunyuan3DWrapper) の `wheels/` | 塗り（venv-21・cp312・torch 2.6.0+cu126） |
+
+※ venv 側の `custom_rasterizer` は一括 install で入るが TRELLIS.2 は使わない。
+**使っていなくても第三者ビルドが入っている**ので、棚卸しからは外さない。
 
 つまり:
 
