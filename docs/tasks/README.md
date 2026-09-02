@@ -76,6 +76,10 @@ A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreem
 
 ---
 
+**B-4 の状態（2026-09-03）**: 実装済み・PR 待ち。
+[windows-startup.md](../setup/windows-startup.md) と `start_server.cmd`。
+タスクスケジューラ登録（PC 起動時に自動で立つ）を実機で確認済み。
+
 **B-3 の状態（2026-09-03）**: 実装済み・PR 待ち。model-viewer を `web/vendor/` に
 同梱（Apache-2.0）。実ブラウザで「done → 3D で見る → glb が表示（loaded=true）→
 もう一度押すと閉じる」を検証済み。
