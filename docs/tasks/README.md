@@ -77,8 +77,9 @@ A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreem
 ---
 
 **B-1 の状態（2026-09-03）**: 実装済み・PR 待ち。API と作りは
-[job-server.md](../setup/job-server.md)。**本物の `run_pipeline` を載せた実機の
-通しは未実施**（GPU 機に接続できなかった）。接続できたら通すこと。
+[job-server.md](../setup/job-server.md)。本物の `run_pipeline` を載せた実機の通しも
+済み（投入 → done 473 秒 → glb 10.3MB を API 経由で受け取り、描画して目視）。
+**ssh 越しに立てたサーバーはセッションと共に死ぬ**ので、常駐は B-4 で扱う。
 
 
 ## C. 品質を上げる

@@ -469,6 +469,14 @@ child.wait()
 
 
 def pid_alive(pid):
+    """★Windows の os.kill(pid, 0) は生存確認に使えない（signal 0 が
+    パラメーター違反になるか、値によってはプロセスを殺す）。tasklist で見る。"""
+    if os.name == 'nt':
+        import subprocess
+        r = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'],
+                           capture_output=True, text=True)
+        return f' {pid} ' in ' ' + r.stdout.replace('\r', ' ') + ' ' or \
+               f' {pid} ' in r.stdout
     try:
         os.kill(pid, 0)
         return True
