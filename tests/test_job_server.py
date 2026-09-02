@@ -4,6 +4,7 @@
 import base64
 import json
 import os
+import pathlib
 import sys
 import time
 import urllib.error
@@ -450,3 +451,232 @@ def test_大きすぎる投入は413(served, monkeypatch):
     code, body = call(base, '/jobs', good_request())
     assert code == 413
     assert '大きすぎます' in body['error']
+
+
+# ---- レビューで見つかった穴（2周目） ----------------------------------------
+
+FAKE_WITH_GRANDCHILD = '''
+import os, subprocess, sys, time
+args = sys.argv[1:]
+out = args[args.index('--out') + 1]
+os.makedirs(os.path.dirname(out), exist_ok=True)
+# 孫プロセス（GPU を使う工程の代役）を起こし、その pid を書き残す
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+open(out + '.grandchild', 'w').write(str(child.pid))
+print('=== 1) 形を作る', flush=True)
+child.wait()
+'''
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def test_取り消しは孫プロセスごと止める(served, tmp_path):
+    # ★GPU を使う実体（リトポロジー・塗り）は run_pipeline の孫で走る。
+    #   直下だけ殺すと、孫が GPU を使い続けたまま「取り消し」になる。
+    #   さらに孫が stdout のパイプを握るので、Runner が孫の完走まで固まる
+    base = served(FAKE_WITH_GRANDCHILD)
+    _, snap = call(base, '/jobs', good_request())
+    marker = tmp_path / 'jobs' / snap['id'] / 'model.glb.grandchild'
+    t0 = time.time()
+    while not marker.is_file() and time.time() - t0 < 15:
+        time.sleep(0.05)
+    assert marker.is_file(), '孫が起きていない'
+    gpid = int(marker.read_text())
+    assert pid_alive(gpid)
+    call(base, f'/jobs/{snap["id"]}/cancel', method='POST')
+    snap = wait_state(base, snap['id'], ('canceled',), timeout=15)
+    t0 = time.time()
+    while pid_alive(gpid) and time.time() - t0 < 10:
+        time.sleep(0.1)
+    assert not pid_alive(gpid), '孫が生き残っている（GPU が空かない）'
+
+
+def test_文字列でない絵は400(served):
+    # ★TypeError のままだと、応答なしの切断になって理由が消える
+    base = served(FAKE_OK)
+    req = good_request()
+    req['images']['front'] = 12345
+    code, body = call(base, '/jobs', req)
+    assert code == 400
+    assert 'front' in body['error']
+
+
+@pytest.mark.parametrize('key,val', [('seed', True), ('texsize', True), ('res', True)])
+def test_boolはintのふりをできない(key, val):
+    # ★Python では isinstance(True, int) が真。通すと --seed True を組んで
+    #   run_pipeline の argparse が落ち、理由が利用者に伝わらない
+    with pytest.raises(ValueError) as e:
+        job_server.validate_request(good_request(**{key: val}))
+    assert key in str(e.value)
+
+
+@pytest.mark.parametrize('bad', [[], 0, False, 'x'])
+def test_paramsの型違いは黙って無視しない(bad):
+    req = good_request()
+    req['params'] = bad
+    with pytest.raises(ValueError) as e:
+        job_server.validate_request(req)
+    assert 'params' in str(e.value)
+
+
+def test_取り消しの受け付けが応答から分かる(served):
+    # ★kill は非同期なので state はまだ running かもしれない。
+    #   cancel_requested が無いと、UI は受理されたのか判別できない
+    base = served(FAKE_SLOW)
+    _, snap = call(base, '/jobs', good_request())
+    wait_state(base, snap['id'], ('running',))
+    code, body = call(base, f'/jobs/{snap["id"]}/cancel', method='POST')
+    assert code == 200
+    assert body['cancel_requested'] is True
+    wait_state(base, snap['id'], ('canceled',))
+
+
+def test_取り消した待ちJobは後続が動いても走らない(served):
+    # ★sleep 頼みにしない。3つ目の Job が done になる＝Runner が
+    #   2つ目を確実に通過した、を合図にする
+    base = served(FAKE_OK)
+    _, a = call(base, '/jobs', good_request())
+    _, b = call(base, '/jobs', good_request())
+    call(base, f'/jobs/{b["id"]}/cancel', method='POST')
+    _, c = call(base, '/jobs', good_request())
+    wait_state(base, c['id'], ('done',))
+    _, snap = call(base, f'/jobs/{b["id"]}')
+    assert snap['state'] == 'canceled'
+    assert snap['started'] is None, '取り消したのに走った'
+
+
+# ---- CORS と経路（唯一の想定クライアントはブラウザ） ------------------------
+
+def test_CORSヘッダが付く(served):
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/jobs')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.headers['Access-Control-Allow-Origin'] == '*'
+
+
+def test_事前確認OPTIONSに応える(served):
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/jobs', method='OPTIONS')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 204
+        assert 'POST' in r.headers['Access-Control-Allow-Methods']
+        assert r.headers['Access-Control-Allow-Headers'] == 'Content-Type'
+
+
+def test_クエリ文字列が付いても経路は同じ(served):
+    # ★UI がキャッシュ避けに ?t=... を付けた瞬間 404 になってはいけない
+    base = served(FAKE_OK)
+    _, snap = call(base, '/jobs', good_request())
+    code, got = call(base, f'/jobs/{snap["id"]}?t=123')
+    assert code == 200
+    assert got['id'] == snap['id']
+
+
+def test_実行中でもログが読める(served):
+    # ★flush が無いと、実行中の /log が空になる
+    base = served(FAKE_STEP1_SLOW)
+    _, snap = call(base, '/jobs', good_request())
+    t0 = time.time()
+    text = ''
+    while time.time() - t0 < 15:
+        req = urllib.request.Request(f'{base}/jobs/{snap["id"]}/log')
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                text = r.read().decode('utf-8')
+        except urllib.error.HTTPError:
+            pass
+        if '=== 1)' in text:
+            break
+        time.sleep(0.05)
+    assert '=== 1)' in text, '実行中にログが見えない'
+    call(base, f'/jobs/{snap["id"]}/cancel', method='POST')
+
+
+def test_工程の目印は3つとも対応が正しい():
+    # ★2) 3) の対応を入れ替えても通しのテストでは気づけないので、表そのものを固定する
+    assert job_server.STEP_MARKS['=== 1)'][0] == 'shape'
+    assert job_server.STEP_MARKS['=== 2)'][0] == 'retopo'
+    assert job_server.STEP_MARKS['=== 3)'][0] == 'parts'
+    assert set(job_server.STEP_MARKS) == {'=== 1)', '=== 2)', '=== 3)'}
+
+
+def test_想定外の失敗でも内部のパスを出さない(served, tmp_path, monkeypatch):
+    # ★エラー文にローカルの絶対パスが混ざると、UI がそれに依存し始める
+    def boom(*a, **k):
+        raise OSError(f'{tmp_path}/secret が壊れた')
+
+    base = served(FAKE_OK)
+    monkeypatch.setattr(job_server.subprocess, 'Popen', boom)
+    _, snap = call(base, '/jobs', good_request())
+    snap = wait_state(base, snap['id'], ('failed',))
+    assert str(tmp_path) not in json.dumps(snap)
+
+
+# ---- run_one を直接叩く（外からは踏めない隙間） -----------------------------
+
+def make_runner_job(tmp_path, monkeypatch, script):
+    fake = tmp_path / 'fake_pipeline.py'
+    fake.write_text(script, encoding='utf-8')
+    monkeypatch.setattr(job_server, 'PIPELINE', str(fake))
+    store = job_server.JobStore(str(tmp_path / 'jobs'))
+    decoded = {v: PNG for v in job_server.VIEWS}
+    job = store.create(decoded, {})
+    runner = job_server.Runner(store, python=sys.executable)
+    return runner, job
+
+
+def test_起動の途中で取り消されても走らせ続けない(tmp_path, monkeypatch):
+    # ★cancel が「Runner の取り出し後〜proc を差すまで」の隙間に入ると、
+    #   誰も殺さないまま裏で数分走る。run_one は proc を差した直後に
+    #   cancel_requested を見て自分で殺す
+    runner, job = make_runner_job(tmp_path, monkeypatch, FAKE_SLOW)
+    job.cancel_requested = True                 # 隙間で cancel が入った状態
+    t0 = time.time()
+    runner.run_one(job)                         # 60秒待たされたら負け
+    took = time.time() - t0
+    assert took < 20, f'取り消したのに {took:.0f} 秒走った'
+    assert job.state == 'canceled'
+
+
+FAKE_PID_SLOW = """
+import os, sys, time
+args = sys.argv[1:]
+out = args[args.index('--out') + 1]
+os.makedirs(os.path.dirname(out), exist_ok=True)
+open(out + '.pid', 'w').write(str(os.getpid()))
+print('=== 1) 形を作る', flush=True)
+time.sleep(120)
+"""
+
+
+def test_読み取りが失敗しても子を見捨てない(tmp_path, monkeypatch):
+    # ★except で proc を放すと、GPU を使ったまま Runner が次の Job を始めて
+    #   1枚の GPU に2本載る。「早く返る」だけでなく【子が死んだ】ことまで見る
+    runner, job = make_runner_job(tmp_path, monkeypatch, FAKE_PID_SLOW)
+
+    class Boom:
+        def items(self):
+            raise RuntimeError('読み取りで壊れた')
+
+    monkeypatch.setattr(job_server, 'STEP_MARKS', Boom())
+    t0 = time.time()
+    runner.run_one(job)                         # 子が生きたままなら wait で固まる
+    took = time.time() - t0
+    assert took < 20, f'子を見捨てて {took:.0f} 秒待った'
+    assert job.state == 'failed'
+    assert job.proc is None
+    pid_file = pathlib.Path(job.out_path + '.pid')
+    assert pid_file.is_file(), '子が pid を書く前に落ちた（テストの前提が崩れた）'
+    pid = int(pid_file.read_text())
+    t0 = time.time()
+    while pid_alive(pid) and time.time() - t0 < 10:
+        time.sleep(0.1)
+    assert not pid_alive(pid), '子が生き残っている（GPU が空かない）'

@@ -29,7 +29,7 @@ cd C:\work\parts-studio
 | `GET /jobs/<id>` | 1つの Job の状態 |
 | `GET /jobs/<id>/log` | 実行ログそのまま |
 | `GET /jobs/<id>/result` | 出来上がりの glb（`done` になってから） |
-| `POST /jobs/<id>/cancel` | 取り消し。実行中ならプロセスを止める |
+| `POST /jobs/<id>/cancel` | 取り消し。実行中ならプロセスを**子孫ごと**止める |
 
 ### 投入の形
 
@@ -59,6 +59,9 @@ cd C:\work\parts-studio
 ```
 
 - `state`: `queued` → `running` → `done` / `failed` / `canceled`
+- `cancel_requested`: 取り消しを受け付けたか。**kill は非同期**なので、
+  取り消しの応答時点では `state` がまだ `running` のことがある。
+  UI はこれを見てから `canceled` になるのを待つ
 - `step`: 実行中の工程（`shape` / `retopo` / `parts`）。
   `run_pipeline` の標準出力の「`=== N)`」の行から拾う
 - **内部のパスは返さない。** GPU がローカルか遠隔かを UI に持ち込まない境界
@@ -89,6 +92,18 @@ GPU は1枚。塗りだけで確保 20.41GB（16GB 機で辛うじて回る）�
 成功でも 0 にならない実測を持っている）。**0 で終わっても出力が無ければ
 `failed`、出力があっても 0 でなければ `failed`**。
 
+### 取り消しはプロセスを【子孫ごと】止める
+
+`proc.kill()` だけでは足りない。GPU を使う実体（リトポロジー・塗り）は
+`run_pipeline` が起こす**孫プロセス**で走る。直下だけ殺すと、
+
+1. 孫が生き残って GPU を使い続ける（取り消しても空かない）
+2. 孫が stdout のパイプを握ったままなので EOF が来ず、Runner が固まって
+   後続の Job も進まない
+
+Windows の TerminateProcess は子孫に伝播しないので `taskkill /T /F` を使う。
+POSIX ではプロセスグループごと止める。
+
 ### Job ごとにディレクトリを分ける
 
 ```
@@ -96,9 +111,14 @@ out/jobs/<id>/
 ├── input/           受け取った絵4枚（何から作ったか後から確かめられる）
 ├── work/            run_pipeline の中間ファイル（Job 間で共有しない）
 ├── log.txt          標準出力そのまま
-├── status.json      状態の写し（サーバーを立て直しても追える）
+├── status.json      状態の写し
 └── model.glb        出来上がり
 ```
+
+**★サーバーを立て直すと、前の Job は API からは見えない**（読み戻しは無い）。
+入力・ログ・出来上がりはディスクに残るので、手で辿ることはできる。
+サーバーやマシンごと落ちた場合、`status.json` は `running` のまま残る
+（突き合わせる仕組みが無い）。`running` の残骸は信用しないこと。
 
 `work/` を Job 間で共有しない理由は
 [run_pipeline の実測](../measurements/2026-08-31-run-pipeline.md)の
@@ -106,10 +126,11 @@ out/jobs/<id>/
 
 ## 検証
 
-- テスト 44 件（`tests/test_job_server.py`）。**実際に HTTP で叩く**
+- テスト 63 件（`tests/test_job_server.py`）。**実際に HTTP で叩く**
   （port 0 で空いている口を借りる）。重い `run_pipeline` は代わりの
-  スクリプトを差し込む。GPU も torch も要らない
-- 変異テスト 20 種すべて捕捉（逃げ 0）
+  スクリプトを差し込む。取り消しは**本物の孫プロセスを起こして、
+  死んだことまで**確かめる。GPU も torch も要らない
+- 変異テスト 32 種すべて捕捉（逃げ 0）。★この 32 種の範囲で、である
 
 > **未検証（2026-09-03 時点）**: 本物の `run_pipeline` を経路に載せた
 > 実機の通しは、GPU 機に接続できず**まだやっていない**。
