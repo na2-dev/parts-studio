@@ -15,6 +15,7 @@
 #   venv\Scripts\python.exe tools\apply_reference_detail.py 入力.glb 出力.glb ^
 #       --front=正面.png --left=左.png --right=右.png --back=後ろ.png ^
 #       [--mode=detail|color] [--top=0.0] [--bottom=1.0] [--dump=フォルダ]
+#       [--partof=全身.glb] [--fixviews] [--up=y|z]
 import os, sys
 import numpy as np
 import trimesh
@@ -55,21 +56,83 @@ def to_zup(v):
     return np.stack([v[:, 0], -v[:, 2], v[:, 1]], 1)
 
 
-def load_mesh_as_yup(path):
-    """glb を読み、上方向を実測して project_detail の規約に揃える。
+def detect_up(v):
+    """一番長い軸を上とみなす。返り値は 'y' か 'z'。
 
-    ★上方向は書き出し経路で変わる（to_glb経由=Y上 / trimesh直=Z上）。決め打ちしない。
+    ★これは【全身にしか使えない】。パーツは背が低いので当たらない。
+      実測（2026-08-31）: 頭 X=0.488 Y=0.433 Z=0.470、体 X=0.758 Y=0.287 Z=0.536。
+      どちらも一番長いのは X で、Z 上なのに「Y 上」と判定してしまう。
+      パーツを扱うときは切り出し元の上方向を up= で渡すこと。
     """
-    m = trimesh.load(path, force='mesh')
+    ext = np.asarray(v).max(0) - np.asarray(v).min(0)
+    return 'z' if int(np.argmax(ext)) == 2 else 'y'
+
+
+def load_mesh_as_yup(path, up=None):
+    """glb を読み、上方向を project_detail の規約（Y上）に揃える。
+
+    ★上方向は書き出し経路で変わる（to_glb経由=Y上 / trimesh直=Z上）ので
+      決め打ちしない。up に 'y' / 'z' を渡せばそれに従う。
+    """
+    # ★process=False。UV 付きのメッシュを読む唯一の場所なので、
+    #   頂点の併合で UV シームが潰れないようにする
+    m = trimesh.load(path, force='mesh', process=False)
     v = np.asarray(m.vertices, dtype=np.float64)
-    ext = v.max(0) - v.min(0)
-    up = int(np.argmax(ext))
-    if up == 2:
+    if up is None:
+        up = detect_up(v)
+        how = 'と判定'
+    else:
+        how = 'と指定'
+    if up not in ('y', 'z'):
+        raise SystemExit(f"上方向は 'y' か 'z'。受け取った値: {up!r}")
+    if up == 'z':
         m.vertices = to_yup(v)
-        print(f'上方向: Z と判定 -> Y上に変換', flush=True)
+        print(f'上方向: Z {how} -> Y上に変換', flush=True)
         return m, True
-    print(f'上方向: Y と判定 -> そのまま', flush=True)
+    print(f'上方向: Y {how} -> そのまま', flush=True)
     return m, False
+
+
+def project(src, dst, images, partof=None, fixviews=False, up=None, **kw):
+    """元の絵の細部を貼り直して保存する。
+
+    images: {向き: パス または PIL.Image}。front は必須。
+    partof: パーツを扱うとき、【切る前の全身】の glb を渡す。
+        ★これを渡さないと、絵とメッシュがそれぞれ自分の高さで正規化されて
+          対応が取れず、1 画素も貼れない（2026-08-30 実測。体 0%）。
+          絵は切らずに全身のものをそのまま渡すこと。
+    up: 'y' / 'z'。★パーツを扱うときは【切り出し元の上方向】を渡すこと。
+        自動判定は一番長い軸を上とみなすので、背の低いパーツでは当たらない。
+    fixviews: 視点の対応づけを固定する。
+        ★頭のように上下に短いパーツは、シルエットの自動対応づけが
+          正面を後ろに割り当てることがある（実測）。
+    """
+    imgs = {v: (Image.open(im) if isinstance(im, str) else im)
+            for v, im in images.items() if im is not None}
+    if 'front' not in imgs:
+        raise SystemExit('正面の絵（front）は必須です')
+
+    old_assign = PD.assign_views
+    if fixviews:
+        PD.assign_views = _fixed_assign
+    try:
+        mesh, converted = load_mesh_as_yup(src, up)
+        if partof:
+            # ★パーツと全身は同じ上方向でないと座標系がずれる。
+            #   ずれると絵とメッシュが対応せず、貼れる画素が激減する
+            #   （2026-08-31 実測: 頭 9.46% / 体 6.18%）
+            fm, _ = load_mesh_as_yup(partof, up)
+            kw['norm_ref'] = np.asarray(fm.vertices, dtype=np.float64)
+            kw['fixfit'] = True
+            print(f'パーツとして扱います（全身: {partof}）', flush=True)
+        out = apply_detail(mesh, imgs, **kw)
+    finally:
+        PD.assign_views = old_assign        # ★同じプロセスで続けて呼ぶので必ず戻す
+    if converted:
+        out.vertices = to_zup(np.asarray(out.vertices, dtype=np.float64))
+    out.export(dst)
+    print(f'保存: {dst}', flush=True)
+    return out
 
 
 def main():
@@ -79,31 +142,11 @@ def main():
         got = arg(k, None)
         if got is not None:
             kw[k] = type(dv)(got) if dv is not None and not isinstance(dv, str) else got
-    imgs = {}
-    for v in ('front', 'left', 'right', 'back'):
-        p = arg(v, None)
-        if p:
-            imgs[v] = Image.open(p)
-    if 'front' not in imgs:
-        sys.exit('--front=正面.png は必須です')
-
-    if arg('fixviews', None) is not None:
-        PD.assign_views = _fixed_assign
-    mesh, converted = load_mesh_as_yup(src)
-
-    # ★パーツを扱うとき: 全身のメッシュを渡すと、正規化をそちらで行い、
-    #   全体の位置合わせを飛ばす。絵は【切らない全身のもの】をそのまま渡すこと。
-    full = arg('partof', None)
-    if full:
-        fm, _ = load_mesh_as_yup(full)
-        kw['norm_ref'] = np.asarray(fm.vertices, dtype=np.float64)
-        kw['fixfit'] = True
-        print(f'パーツとして扱います（全身: {full}）', flush=True)
-    out = apply_detail(mesh, imgs, **kw)
-    if converted:
-        out.vertices = to_zup(np.asarray(out.vertices, dtype=np.float64))
-    out.export(dst)
-    print(f'保存: {dst}', flush=True)
+    images = {v: arg(v, None) for v in ('front', 'left', 'right', 'back')}
+    project(src, dst, images,
+            partof=arg('partof', None),
+            fixviews=arg('fixviews', None) is not None,
+            up=arg('up', None), **kw)
 
 
 if __name__ == '__main__':

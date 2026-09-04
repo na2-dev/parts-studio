@@ -13,9 +13,10 @@
 > | `tools/bake_to_uv.py` | `experiments/bake_to_uv.py` |
 > | `tools/crop_ref_for_part.py` | `experiments/crop_ref_for_part.py` |
 >
-> **それ以外の `tools/xxx` はそのまま有効。** `retopo_shrinkwrap.py` /
-> `split_parts.py` / `extract_part.py` / `combine_parts.py` /
-> `apply_reference_detail.py` は本線として `tools/` に実在する。
+> **それ以外の `tools/xxx` はそのまま有効。** `make_shape.py` / `mvcond.py` /
+> `patches.py` / `retopo_shrinkwrap.py` / `split_parts.py` / `smooth_part.py` /
+> `extract_part.py` / `combine_parts.py` / `apply_reference_detail.py` は
+> 本線として `tools/` に実在する。
 >
 > **`tools/remesh_blender.py` と書かれている箇所は 3d-studio 側のファイルを指す。**
 > 読み替えてはいけない。

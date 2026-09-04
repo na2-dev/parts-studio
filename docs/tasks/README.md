@@ -21,18 +21,19 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 
 ## A. 土台を固める（最優先）
 
-いまパイプラインは**手で 7 工程を繋いだ状態**で、スクリプトになっていない
-（工程の内訳は [通しの手順](../measurements/2026-08-30-final-pipeline.md#通しの手順更新) を参照）。
-ここが最大の弱点なので先に潰す。
+**（2026-08-31 に解消）** ここは「手で 7 工程を繋いだ状態」だったが、
+`tools/run_pipeline.py` で **4 枚 → 完成 glb が1コマンド**になった
+（[実測](../measurements/2026-08-31-run-pipeline.md)。436 秒）。
+工程の内訳は [通しの手順](../measurements/2026-08-30-final-pipeline.md#通しの手順更新)。
 
 | ID | Issue | タスク | 由来 | 状態 | 前提 |
 |---|---|---|---|---|---|
 | A-1 | [PR #1](https://github.com/na2-dev/parts-studio/pull/1) | 作業の進め方とタスク一覧を用意する | — | 🔵 | — |
-| A-2 | [#2](https://github.com/na2-dev/parts-studio/issues/2) | 形づくりを 1 コマンドにする（4枚 → 形の glb） | ADR-0003/0005 | 🔵 | A-1 |
+| A-2 | [#2](https://github.com/na2-dev/parts-studio/issues/2) | ~~形づくりを 1 コマンドにする（4枚 → 形の glb）~~ | ADR-0003/0005 | ✅ | — |
 | A-3 | — | ~~リトポロジーを 1 コマンドにする~~ | ADR-0007 | ✅ | — |
 | A-4 | [#3](https://github.com/na2-dev/parts-studio/issues/3) | 塗り工程を parts-studio から呼べるようにする | ADR-0008 | 🔵 | A-1 |
-| A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | ⏸ | A-4 |
-| A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | ⏸ | A-2〜A-5 |
+| A-5 | [#4](https://github.com/na2-dev/parts-studio/issues/4) | パーツ分割・投影・結合を 1 コマンドにする | ADR-0008 | 🔵 | A-4 |
+| A-6 | [#5](https://github.com/na2-dev/parts-studio/issues/5) | 通しのパイプラインを 1 コマンドにする（4枚 → 完成 glb） | 全体 | 🔵 | A-2〜A-5 |
 | A-7 | [#6](https://github.com/na2-dev/parts-studio/issues/6) | 別の題材で通して、過適合を確かめる | — | ⏸ | A-6 |
 
 **A-3 は完了済み**: `experiments/remesh_blender.py` は QuadriFlow が通らず使えなかったが、
@@ -45,7 +46,21 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 `PARTS_STUDIO_PAINT_ROOT` で差し替えられる。借りていることは実行時に必ず表示する。
 自前で作る手順は [paint-environment.md](../setup/paint-environment.md)（**まだ通していない**）。
 
-**A-7 の注意**: 「首の高さの自動検出」「ならし 8 回」「切る高さ 0.033」などは、
+**A-5 の状態について**: 🔵 は「前提が揃っている」だが、A-5 は**着手済みで PR 待ち**。
+前提の A-4 も PR #20 が main 未マージなので、厳密には揃っていない。
+A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreement.md#ブランチと-pr)）。
+
+**A-5 で分かったこと（2026-08-31）**: 上方向の扱いが 3 か所で間違っていた。
+どれもエラーを出さず、出来上がりが静かに悪くなるだけだった
+（[実測](../measurements/2026-08-31-up-axis.md)）。とくに**色塗りは Y 上のメッシュを
+前提にしており、Z 上のまま渡すと顔が頭の裏側に付く**。
+
+**A-6 の結果（2026-08-31）**: `tools/run_pipeline.py` で 4 枚 → 完成 glb が
+**436 秒**で通った（[実測](../measurements/2026-08-31-run-pipeline.md)）。
+`--from` で途中から始められる。**リトポロジーは成功しても終了コードが 0 にならない**
+（bpy が終了時に落ちる）ので、出力が新しくなったかで判定している。
+
+**A-7 の注意**: 「首の高さの自動検出」「ならし 8 回」「首から上へ足す余白 `--margin` 0.01」などは、
 すべて 1 体だけで調整した値。別の絵で通らない可能性がある。
 
 ---
@@ -54,12 +69,31 @@ grill で決めた ADR を、PR 1 つ分の大きさに割ったもの。
 
 | ID | Issue | タスク | 由来 | 状態 | 前提 |
 |---|---|---|---|---|---|
-| B-1 | [#7](https://github.com/na2-dev/parts-studio/issues/7) | ジョブサーバー（HTTP API・ジョブの投入と進捗） | ADR-0001 | ⏸ | A-6 |
-| B-2 | [#8](https://github.com/na2-dev/parts-studio/issues/8) | ブラウザ UI（4枚アップロード → 進捗 → ダウンロード） | ADR-0001 | ⏸ | B-1 |
-| B-3 | [#9](https://github.com/na2-dev/parts-studio/issues/9) | 3D ビューア（出来た glb をその場で回して見る） | ADR-0001 | ⏸ | B-2 |
-| B-4 | [#10](https://github.com/na2-dev/parts-studio/issues/10) | Windows 機での起動手順（利用者向け） | ADR-0004 | ⏸ | B-2 |
+| B-1 | [#7](https://github.com/na2-dev/parts-studio/issues/7) | ジョブサーバー（HTTP API・ジョブの投入と進捗） | ADR-0001 | 🔵 | A-6 |
+| B-2 | [#8](https://github.com/na2-dev/parts-studio/issues/8) | ブラウザ UI（4枚アップロード → 進捗 → ダウンロード） | ADR-0001 | 🔵 | B-1 |
+| B-3 | [#9](https://github.com/na2-dev/parts-studio/issues/9) | 3D ビューア（出来た glb をその場で回して見る） | ADR-0001 | 🔵 | B-2 |
+| B-4 | [#10](https://github.com/na2-dev/parts-studio/issues/10) | Windows 機での起動手順（利用者向け） | ADR-0004 | 🔵 | B-2 |
 
 ---
+
+**B-4 の状態（2026-09-03）**: 実装済み・PR 待ち。
+[windows-startup.md](../setup/windows-startup.md) と `start_server.cmd`。
+実機で確認したのは**登録と `/Run` で立つところまで**（ssh を切っても生存）。
+再起動での自動起動は未確認。
+
+**B-3 の状態（2026-09-03）**: 実装済み・PR 待ち。model-viewer を `web/vendor/` に
+同梱（Apache-2.0）。実ブラウザで「done → 3D で見る → glb が表示（loaded=true）→
+もう一度押すと閉じる」を検証済み。
+
+**B-2 の状態（2026-09-03）**: 実装済み・PR 待ち。UI はジョブサーバーが配る
+単一 HTML（`web/index.html`）。実ブラウザ（Chrome headless）で
+「4枚そろうまで押せない → 投入 → 進捗 → glb 受け取り」を検証済み。
+
+**B-1 の状態（2026-09-03）**: 実装済み・PR 待ち。API と作りは
+[job-server.md](../setup/job-server.md)。本物の `run_pipeline` を載せた実機の通しも
+済み（投入 → done 473 秒 → glb 10.3MB を API 経由で受け取り、描画して目視）。
+**ssh 越しに立てたサーバーはセッションと共に死ぬ**ので、常駐は B-4 で扱う。
+
 
 ## C. 品質を上げる
 
