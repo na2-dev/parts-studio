@@ -548,35 +548,36 @@ def test_取り消しの受け付けが応答から分かる(served):
 
 
 def test_取り消した待ちJobは後続が動いても走らない(served):
-    # ★sleep 頼みにしない。3つ目の Job が done になる＝Runner が
-    #   2つ目を確実に通過した、を合図にする
-    base = served(FAKE_OK)
+    # ★2つの競合を避ける。
+    #   1. sleep 頼みにしない（負荷の高い環境で空振り合格になる）
+    #   2. 先頭を速い Job にしない（cancel が届く前に b が走り出せてしまう。
+    #      Windows で実際に競合した）
+    #   遅い a で Runner を塞いだまま b を取り消し、a を取り消して流す。
+    #   c が running になる＝Runner が b を確実に通過した、を合図にする
+    base = served(FAKE_SLOW)
     _, a = call(base, '/jobs', good_request())
+    wait_state(base, a['id'], ('running',))     # Runner は a で塞がっている
     _, b = call(base, '/jobs', good_request())
     call(base, f'/jobs/{b["id"]}/cancel', method='POST')
     _, c = call(base, '/jobs', good_request())
-    wait_state(base, c['id'], ('done',))
+    call(base, f'/jobs/{a["id"]}/cancel', method='POST')
+    wait_state(base, c['id'], ('running',))     # b を通過した合図
     _, snap = call(base, f'/jobs/{b["id"]}')
     assert snap['state'] == 'canceled'
     assert snap['started'] is None, '取り消したのに走った'
+    call(base, f'/jobs/{c["id"]}/cancel', method='POST')
 
 
 # ---- CORS と経路（唯一の想定クライアントはブラウザ） ------------------------
 
-def test_CORSヘッダが付く(served):
+def test_CORSは開けない(served):
+    # ★UI は同一オリジンで配るので CORS は要らない。認証が無いので、
+    #   開けると利用者のブラウザで開いた任意のサイトが Job を読めて投入もできる
     base = served(FAKE_OK)
-    req = urllib.request.Request(base + '/jobs')
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.headers['Access-Control-Allow-Origin'] == '*'
-
-
-def test_事前確認OPTIONSに応える(served):
-    base = served(FAKE_OK)
-    req = urllib.request.Request(base + '/jobs', method='OPTIONS')
-    with urllib.request.urlopen(req, timeout=10) as r:
-        assert r.status == 204
-        assert 'POST' in r.headers['Access-Control-Allow-Methods']
-        assert r.headers['Access-Control-Allow-Headers'] == 'Content-Type'
+    for path in ('/', '/jobs'):
+        req = urllib.request.Request(base + path)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.headers.get('Access-Control-Allow-Origin') is None, path
 
 
 def test_クエリ文字列が付いても経路は同じ(served):
@@ -688,3 +689,133 @@ def test_読み取りが失敗しても子を見捨てない(tmp_path, monkeypat
     while pid_alive(pid) and time.time() - t0 < 10:
         time.sleep(0.1)
     assert not pid_alive(pid), '子が生き残っている（GPU が空かない）'
+
+
+# ---- ブラウザ UI（B-2）の配りかた --------------------------------------------
+
+def test_ルートでUIを配る(served):
+    # ★同一オリジンにする。UI は相対パスで API を叩けばよく、CORS も要らない
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200
+        assert r.headers['Content-Type'].startswith('text/html')
+        html = r.read().decode('utf-8')
+    assert 'parts-studio' in html
+    # ★View の枠は実行時に作るので、素の HTML には配列の定義があるはず
+    assert "['front', 'left', 'right', 'back']" in html
+    assert "fetch('jobs'" in html or 'fetch(`jobs' in html
+
+
+def test_UIは相対パスでAPIを叩く():
+    # ★絶対 URL や 127.0.0.1 を書くと、ポートフォワード越しに開いたとき壊れる
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'http://127.0.0.1' not in html
+    assert 'localhost' not in html
+
+
+def test_faviconは404にしない(served):
+    # ★404 のままだとコンソールにエラーが出て、本物の異常が埋もれる
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/favicon.ico')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 204
+
+
+def test_UIが無ければ404の理由を返す(served, monkeypatch):
+    base = served(FAKE_OK)
+    monkeypatch.setattr(job_server, 'UI',
+                        str(pathlib.Path(job_server.UI).parent / 'nai.html'))
+    code, body = call(base, '/')
+    assert code == 404
+    assert 'web/index.html' in body['error']
+
+
+def test_UIは投入のPOSTを持つ():
+    # ★「fetch('jobs'」だけだと一覧の GET にもマッチして、投入を消しても緑になる
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert "method: 'POST'" in html
+    assert 'JSON.stringify({ images, params' in html
+
+
+def test_UIは4Viewが揃うまで投入できない():
+    # ★ボタンの disabled 制御が missing の数に紐づいている
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'btn.disabled = missing.length > 0' in html
+    assert '4 View すべてが揃ってはじめて' in html
+
+
+# ---- 3D ビューア（B-3） -------------------------------------------------------
+
+def test_同梱のビューアを配る(served):
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/vendor/model-viewer.min.js')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200
+        assert r.headers['Content-Type'].startswith('text/javascript')
+        head = r.read(2048).decode('utf-8', errors='replace')
+    # ★先頭はライセンスの帯。実体の目印はそちらで見る
+    assert 'Copyright 2019 Google LLC' in head
+
+
+def test_vendorはjs以外を配らない(served):
+    base = served(FAKE_OK)
+    code, body = call(base, '/vendor/model-viewer.LICENSE')
+    assert code == 404
+
+
+def test_vendorは外へ出られない(served, tmp_path):
+    # ★.. で web/vendor の外のファイルを取らせない
+    base = served(FAKE_OK)
+    for path in ('/vendor/..%2F..%2Ftools%2Fjob_server.py',
+                 '/vendor/../index.html'):
+        code, body = call(base, path)
+        assert code == 404, path
+
+
+def test_配る名前の取り出し():
+    # ★basename 頼みだと POSIX ではバックスラッシュを剥がさず、
+    #   Windows で立てたときだけ外へ出る OS 依存の穴になる。
+    #   関数に切り出して、どの OS のテストでも直接見る
+    ok = job_server.vendor_name
+    assert ok('model-viewer.min.js') == 'model-viewer.min.js'
+    assert ok(r'..\..\tools\x.js') == 'x.js'         # \ 区切りでも最後だけ
+    assert ok('../../web/x.js') == 'x.js'
+    assert ok('model-viewer.LICENSE') is None        # .js 以外は配らない
+    assert ok('.js') is None and ok('..js') is None
+    assert ok('a%5Cb.js') is None                    # デコードしない前提を崩す値
+    assert ok('a%2Fb.js') is None
+
+
+def test_UIはビューアを同梱から読む():
+    # ★CDN を実行時に引かない（オフラインでも動く・供給元に左右されない）
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'vendor/model-viewer.min.js' in html
+    assert 'unpkg.com' not in html and 'googleapis.com' not in html and 'cdn.' not in html
+
+
+def test_UIは出来上がるまで3Dボタンを出さない():
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert "el.querySelector('.viewbtn').hidden = !snap.has_result" in html
+
+
+def test_ビューアの実体が同梱されている():
+    p = pathlib.Path(job_server.VENDOR) / 'model-viewer.min.js'
+    assert p.is_file() and p.stat().st_size > 500_000
+    lic = pathlib.Path(job_server.VENDOR) / 'model-viewer.LICENSE'
+    assert lic.is_file() and 'Apache License' in lic.read_text(encoding='utf-8')
+
+
+# ---- 起動用の cmd（B-4） ------------------------------------------------------
+
+def test_起動cmdの中身():
+    p = pathlib.Path(job_server.ROOT) / 'start_server.cmd'
+    assert p.is_file()
+    raw = p.read_bytes()
+    assert b'\r\n' in raw                     # ★cmd は CRLF。read_text は正規化して見えない
+    text = raw.decode('utf-8')
+    assert 'PYTHONUTF8=1' in text                # ★無いとログが cp932 で化ける（実測）
+    assert 'cd /d %~dp0' in text                 # どこから呼ばれても自分の場所で動く
+    assert 'tools\\job_server.py' in text
+    assert 'server.log' in text                  # サーバーのログを捨てない
+    assert text.startswith('@echo off')

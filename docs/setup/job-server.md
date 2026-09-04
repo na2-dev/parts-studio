@@ -8,7 +8,8 @@ GPU 機でこのサーバーを立て、ブラウザはここに Job を投げ�
 ```powershell
 cd C:\work\parts-studio
 .\venv\Scripts\python.exe tools\job_server.py
-# ジョブサーバー: http://127.0.0.1:8787/jobs / Job の置き場所 ...\out\jobs
+# ジョブサーバー: http://127.0.0.1:8787/ / Job の置き場所 ...\out\jobs
+# ブラウザでこの URL を開くと UI が出ます
 ```
 
 | 引数 | 既定 | 意味 |
@@ -20,6 +21,37 @@ cd C:\work\parts-studio
 別の機体から使うときは SSH のポートフォワードで届かせる。
 リポジトリが公開なので、認証の無いままネットワークへ開かないこと。
 
+## ブラウザ UI（B-2）
+
+`http://127.0.0.1:8787/` を開くと UI が出る。**UI もこのサーバーが配る**
+（`web/index.html`・ビルド不要の単一ファイル）。同一オリジンになるので、
+UI は相対パスで API を叩けばよく、CORS も接続先の設定も要らない。
+**CORS は開けていない**。認証が無いので、開けると利用者のブラウザで開いた
+任意のサイトが Job を読めて投入もできてしまう。
+
+- 絵4枚をクリックかドロップで置く。**4 枚そろうまで「作る」は押せない**
+  （ボタンに「あと N 枚」と出る）
+- 投入すると Job カードが出て、工程の帯（形 → リトポロジー → パーツ塗り）が
+  2 秒ごとに進む。`done` になったら「glb を受け取る」が出る
+- `done` になった Job は「**3D で見る**」でその場で回して見られる
+  （[model-viewer](https://www.npmjs.com/package/@google/model-viewer) を
+  `web/vendor/` に**同梱**して使う。実行時に CDN を引かない。
+  出どころと更新のしかたは [web/vendor/README.md](../../web/vendor/README.md)）
+- ログ・取り消しもカードから
+- ページを開き直しても、サーバーが覚えている Job は一覧に戻る
+
+| 実行中 | 出来上がり（3D で見る） |
+| :--- | :--- |
+| ![running](../measurements/images/2026-09-03-ui-running.png) | ![viewer](../measurements/images/2026-09-03-ui-viewer.png) |
+
+（[done 直後の絵](../measurements/images/2026-09-03-ui-done.png)もある）
+
+**実ブラウザで検証済み**（Chrome headless + puppeteer-core、偽のパイプラインを
+差した本物のサーバー相手）: 0〜3枚では押せない → 4枚で押せる → 投入 →
+running（工程の帯が進む）→ done → glb を受け取れる、コンソールエラーなし。
+3D ビューアも本物の glb で「3D で見る → 表示（loaded=true）→ もう一度押すと
+閉じる」まで確認している。
+
 ## API
 
 | 経路 | 何をするか |
@@ -30,6 +62,7 @@ cd C:\work\parts-studio
 | `GET /jobs/<id>/log` | 実行ログそのまま |
 | `GET /jobs/<id>/result` | 出来上がりの glb（`done` になってから） |
 | `POST /jobs/<id>/cancel` | 取り消し。実行中ならプロセスを**子孫ごと**止める |
+| `GET /vendor/<name>.js` | 同梱の外部ファイル（3D ビューア）。`web/vendor/` の `.js` だけを配る |
 
 ### 投入の形
 
@@ -60,8 +93,9 @@ cd C:\work\parts-studio
 
 - `state`: `queued` → `running` → `done` / `failed` / `canceled`
 - `cancel_requested`: 取り消しを受け付けたか。**kill は非同期**なので、
-  取り消しの応答時点では `state` がまだ `running` のことがある。
-  UI はこれを見てから `canceled` になるのを待つ
+  取り消しの応答時点では `state` がまだ `running` のことがある
+  （いまの UI は state のポーリングだけで `canceled` を待つ。
+  この欄は API を直接使うときの判別用）
 - `step`: 実行中の工程（`shape` / `retopo` / `parts`）。
   `run_pipeline` の標準出力の「`=== N)`」の行から拾う
 - **内部のパスは返さない。** GPU がローカルか遠隔かを UI に持ち込まない境界

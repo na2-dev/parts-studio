@@ -40,6 +40,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 VIEWS = ('front', 'left', 'right', 'back')
+UI = os.path.join(ROOT, 'web', 'index.html')     # ブラウザ UI（B-2）。単一ファイル
+VENDOR = os.path.join(ROOT, 'web', 'vendor')     # 同梱の外部ファイル（3D ビューア）
 STATES = ('queued', 'running', 'done', 'failed', 'canceled')
 PIPELINE = os.path.join(HERE, 'run_pipeline.py')
 
@@ -141,6 +143,25 @@ class Job:
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             os.replace(tmp, path)           # ★書きかけの status.json を読ませない
+
+
+def vendor_name(raw):
+    r"""/vendor/<raw> から配ってよいファイル名を取り出す。だめなら None。
+
+    ★両方の区切りで最後の要素に落とす。os.path.basename は POSIX では
+      バックスラッシュを剥がさないので、Windows で立てたときだけ
+      `..\..\x.js` が外へ出る、という OS 依存の穴になる。
+      ここで自前に落とせば、どの OS でも同じに振る舞い、テストも直接できる。
+      なお parse_path は URL デコードをしない（%2F や %5C は文字のまま）
+      という前提にも依存している。
+    """
+    name = raw.replace('\\', '/').rsplit('/', 1)[-1]
+    if not name.endswith('.js') or name in ('.js', '..js'):
+        return None
+    if '%' in name:
+        # ★デコードしない前提を崩す値は受けない（%5C などの持ち込み）
+        return None
+    return name
 
 
 def kill_tree(proc):
@@ -376,7 +397,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
@@ -391,15 +411,28 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in self.path.split('?')[0].split('/') if p]
         return parts
 
-    def do_OPTIONS(self):                   # ブラウザの事前確認（CORS）
-        self.send_response(204)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
     def do_GET(self):
         parts = self.parse_path()
+        if len(parts) == 2 and parts[0] == 'vendor':
+            name = vendor_name(parts[1])
+            if name is None:
+                return self.send_error_json(404, f'知らない経路です: {self.path}')
+            return self.send_file(os.path.join(VENDOR, name),
+                                  'text/javascript; charset=utf-8',
+                                  f'同梱ファイルがありません: {name}')
+        if parts == ['favicon.ico']:
+            # ★ブラウザが勝手に取りに来る。404 のままだとコンソールに
+            #   エラーが出て、本物の異常が埋もれる
+            self.send_response(204)
+            self.end_headers()
+            return
+        if not parts:
+            # ★UI もこのサーバーが配る。同一オリジンになり、UI は相対パスで
+            #   API を叩けばよく、CORS も接続先の設定も要らない。
+            #   ★CORS は開けない。認証が無いので、開けると利用者のブラウザで
+            #     開いた任意のサイトが Job の一覧・結果を読めて投入もできてしまう
+            return self.send_file(UI, 'text/html; charset=utf-8',
+                                  'UI が見つかりません（web/index.html）')
         if parts == ['jobs']:
             return self.send_json(200, {'jobs': self.server.store.list()})
         if len(parts) >= 2 and parts[0] == 'jobs':
@@ -426,7 +459,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
@@ -499,8 +531,9 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     server = make_server(args.port, os.path.abspath(args.jobs))
-    print(f'ジョブサーバー: http://127.0.0.1:{args.port}/jobs '
+    print(f'ジョブサーバー: http://127.0.0.1:{args.port}/ '
           f'/ Job の置き場所 {args.jobs}', flush=True)
+    print('ブラウザでこの URL を開くと UI が出ます', flush=True)
     print('止めるには Ctrl-C', flush=True)
     try:
         server.serve_forever()
