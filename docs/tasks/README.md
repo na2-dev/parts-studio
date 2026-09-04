@@ -71,10 +71,19 @@ A-5 は A-4 のブランチの上に積んでいる（[理由](../working-agreem
 |---|---|---|---|---|---|
 | B-1 | [#7](https://github.com/na2-dev/parts-studio/issues/7) | ジョブサーバー（HTTP API・ジョブの投入と進捗） | ADR-0001 | 🔵 | A-6 |
 | B-2 | [#8](https://github.com/na2-dev/parts-studio/issues/8) | ブラウザ UI（4枚アップロード → 進捗 → ダウンロード） | ADR-0001 | 🔵 | B-1 |
-| B-3 | [#9](https://github.com/na2-dev/parts-studio/issues/9) | 3D ビューア（出来た glb をその場で回して見る） | ADR-0001 | ⏸ | B-2 |
-| B-4 | [#10](https://github.com/na2-dev/parts-studio/issues/10) | Windows 機での起動手順（利用者向け） | ADR-0004 | ⏸ | B-2 |
+| B-3 | [#9](https://github.com/na2-dev/parts-studio/issues/9) | 3D ビューア（出来た glb をその場で回して見る） | ADR-0001 | 🔵 | B-2 |
+| B-4 | [#10](https://github.com/na2-dev/parts-studio/issues/10) | Windows 機での起動手順（利用者向け） | ADR-0004 | 🔵 | B-2 |
 
 ---
+
+**B-4 の状態（2026-09-03）**: 実装済み・PR 待ち。
+[windows-startup.md](../setup/windows-startup.md) と `start_server.cmd`。
+実機で確認したのは**登録と `/Run` で立つところまで**（ssh を切っても生存）。
+再起動での自動起動は未確認。
+
+**B-3 の状態（2026-09-03）**: 実装済み・PR 待ち。model-viewer を `web/vendor/` に
+同梱（Apache-2.0）。実ブラウザで「done → 3D で見る → glb が表示（loaded=true）→
+もう一度押すと閉じる」を検証済み。
 
 **B-2 の状態（2026-09-03）**: 実装済み・PR 待ち。UI はジョブサーバーが配る
 単一 HTML（`web/index.html`）。実ブラウザ（Chrome headless）で

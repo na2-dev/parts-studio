@@ -65,6 +65,8 @@
             padding: 8px; font-size: 11px; max-height: 180px; overflow: auto;
             white-space: pre-wrap; display: none; }
   pre.log.show { display: block; }
+  model-viewer { width: 100%; height: 360px; background: #23262e;
+                 border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -95,6 +97,7 @@
   </section>
 </main>
 
+<script type="module" src="vendor/model-viewer.min.js"></script>
 <script>
 'use strict';
 const VIEWS = ['front', 'left', 'right', 'back'];
@@ -237,6 +240,7 @@ function addJobCard(snap) {
       <span class="id">${snap.id}</span>
       <span style="flex:1"></span>
       <a class="dl" hidden download="model.glb">glb を受け取る</a>
+      <button class="minor viewbtn" hidden>3D で見る</button>
       <button class="minor logbtn">ログ</button>
       <button class="minor cancel">取り消す</button>
       <span class="badge"></span>
@@ -256,6 +260,37 @@ function addJobCard(snap) {
     } catch (e) {
       el.querySelector('.msg').textContent = '取り消しが届きません: ' + e.message;
     }
+  });
+  el.querySelector('.viewbtn').addEventListener('click', () => {
+    // ★押されたときにだけ組み立てる。done のたびに全カードで WebGL を
+    //   立ち上げると重い
+    let mv = el.querySelector('model-viewer');
+    if (mv) { mv.remove(); return; }            // 2度目は閉じる
+    if (!customElements.get('model-viewer')) {
+      el.querySelector('.msg').textContent =
+        'ビューアを読み込めていません（vendor/model-viewer.min.js）。glb を受け取って Blender で見てください';
+      return;
+    }
+    mv = document.createElement('model-viewer');
+    mv.setAttribute('src', `jobs/${snap.id}/result`);
+    mv.setAttribute('camera-controls', '');
+    mv.setAttribute('shadow-intensity', '0.6');
+    mv.setAttribute('alt', '出来上がりの 3D モデル');
+    mv.addEventListener('error', () => {
+      el.querySelector('.msg').textContent =
+        '3D の表示に失敗しました。glb を受け取って Blender で確かめてください';
+      el.querySelector('.msg').className = 'msg error';
+      mv.remove();                              // ★空の枠を残さない（開き直しが1回で済む）
+    });
+    mv.addEventListener('load', () => {
+      // ★前の失敗の赤字を消す。done 後は watch が終わっていて render が走らない
+      const msg = el.querySelector('.msg');
+      if (msg.classList.contains('error')) {
+        msg.textContent = 'できました';
+        msg.className = 'msg';
+      }
+    });
+    el.appendChild(mv);
   });
   el.querySelector('.logbtn').addEventListener('click', async () => {
     const pre = el.querySelector('.log');
@@ -287,6 +322,7 @@ function render(snap) {
   const dl = el.querySelector('a.dl');
   dl.hidden = !snap.has_result;
   if (snap.has_result) dl.href = `jobs/${snap.id}/result`;
+  el.querySelector('.viewbtn').hidden = !snap.has_result;
   el.querySelector('.cancel').hidden =
     ['done', 'failed', 'canceled'].includes(snap.state);
 }

@@ -743,3 +743,79 @@ def test_UIは4Viewが揃うまで投入できない():
     html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
     assert 'btn.disabled = missing.length > 0' in html
     assert '4 View すべてが揃ってはじめて' in html
+
+
+# ---- 3D ビューア（B-3） -------------------------------------------------------
+
+def test_同梱のビューアを配る(served):
+    base = served(FAKE_OK)
+    req = urllib.request.Request(base + '/vendor/model-viewer.min.js')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200
+        assert r.headers['Content-Type'].startswith('text/javascript')
+        head = r.read(2048).decode('utf-8', errors='replace')
+    # ★先頭はライセンスの帯。実体の目印はそちらで見る
+    assert 'Copyright 2019 Google LLC' in head
+
+
+def test_vendorはjs以外を配らない(served):
+    base = served(FAKE_OK)
+    code, body = call(base, '/vendor/model-viewer.LICENSE')
+    assert code == 404
+
+
+def test_vendorは外へ出られない(served, tmp_path):
+    # ★.. で web/vendor の外のファイルを取らせない
+    base = served(FAKE_OK)
+    for path in ('/vendor/..%2F..%2Ftools%2Fjob_server.py',
+                 '/vendor/../index.html'):
+        code, body = call(base, path)
+        assert code == 404, path
+
+
+def test_配る名前の取り出し():
+    # ★basename 頼みだと POSIX ではバックスラッシュを剥がさず、
+    #   Windows で立てたときだけ外へ出る OS 依存の穴になる。
+    #   関数に切り出して、どの OS のテストでも直接見る
+    ok = job_server.vendor_name
+    assert ok('model-viewer.min.js') == 'model-viewer.min.js'
+    assert ok(r'..\..\tools\x.js') == 'x.js'         # \ 区切りでも最後だけ
+    assert ok('../../web/x.js') == 'x.js'
+    assert ok('model-viewer.LICENSE') is None        # .js 以外は配らない
+    assert ok('.js') is None and ok('..js') is None
+    assert ok('a%5Cb.js') is None                    # デコードしない前提を崩す値
+    assert ok('a%2Fb.js') is None
+
+
+def test_UIはビューアを同梱から読む():
+    # ★CDN を実行時に引かない（オフラインでも動く・供給元に左右されない）
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert 'vendor/model-viewer.min.js' in html
+    assert 'unpkg.com' not in html and 'googleapis.com' not in html and 'cdn.' not in html
+
+
+def test_UIは出来上がるまで3Dボタンを出さない():
+    html = pathlib.Path(job_server.UI).read_text(encoding='utf-8')
+    assert "el.querySelector('.viewbtn').hidden = !snap.has_result" in html
+
+
+def test_ビューアの実体が同梱されている():
+    p = pathlib.Path(job_server.VENDOR) / 'model-viewer.min.js'
+    assert p.is_file() and p.stat().st_size > 500_000
+    lic = pathlib.Path(job_server.VENDOR) / 'model-viewer.LICENSE'
+    assert lic.is_file() and 'Apache License' in lic.read_text(encoding='utf-8')
+
+
+# ---- 起動用の cmd（B-4） ------------------------------------------------------
+
+def test_起動cmdの中身():
+    p = pathlib.Path(job_server.ROOT) / 'start_server.cmd'
+    assert p.is_file()
+    raw = p.read_bytes()
+    assert b'\r\n' in raw                     # ★cmd は CRLF。read_text は正規化して見えない
+    text = raw.decode('utf-8')
+    assert 'PYTHONUTF8=1' in text                # ★無いとログが cp932 で化ける（実測）
+    assert 'cd /d %~dp0' in text                 # どこから呼ばれても自分の場所で動く
+    assert 'tools\\job_server.py' in text
+    assert 'server.log' in text                  # サーバーのログを捨てない
+    assert text.startswith('@echo off')

@@ -1,5 +1,9 @@
 # 実行環境は Windows ネイティブとし、CUDA 拡張はビルド済みホイールを借りる
 
+> **追記（2026-09-03・[#10](https://github.com/na2-dev/parts-studio/issues/10)）**:
+> 起動手順とビルド済みホイールの一覧（出どころ・配るときの注意）を
+> [docs/setup/windows-startup.md](../setup/windows-startup.md) にまとめた。
+
 TRELLIS.2 の README は「動作確認は Linux のみ」と書いており、CuMesh / FlexGEMM / O-Voxel /
 nvdiffrast / nvdiffrec の 5 つを CUDA Toolkit でソースからビルドする必要がある。Windows で
 これを自前で通すには C++ の手術（整数の縮小変換の明示キャスト、`ssize_t` / `uint` の定義追加、
