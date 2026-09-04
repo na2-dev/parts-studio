@@ -29,6 +29,7 @@ parts-studio/
 ├── tests/              道具のテスト（GPU 不要・pytest）
 ├── patches/            上流に当てるパッチ
 ├── web/                ブラウザ UI（ジョブサーバーが配る。vendor/ に同梱の外部ファイル）
+├── start_server.cmd    ジョブサーバーを立てる（ダブルクリック / タスクスケジューラ）
 ├── experiments/        本線で使っていないもの。動作を保証しない
 │
 │  ── 以下は git 管理外 ──

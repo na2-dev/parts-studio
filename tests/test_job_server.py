@@ -804,3 +804,18 @@ def test_ビューアの実体が同梱されている():
     assert p.is_file() and p.stat().st_size > 500_000
     lic = pathlib.Path(job_server.VENDOR) / 'model-viewer.LICENSE'
     assert lic.is_file() and 'Apache License' in lic.read_text(encoding='utf-8')
+
+
+# ---- 起動用の cmd（B-4） ------------------------------------------------------
+
+def test_起動cmdの中身():
+    p = pathlib.Path(job_server.ROOT) / 'start_server.cmd'
+    assert p.is_file()
+    raw = p.read_bytes()
+    assert b'\r\n' in raw                     # ★cmd は CRLF。read_text は正規化して見えない
+    text = raw.decode('utf-8')
+    assert 'PYTHONUTF8=1' in text                # ★無いとログが cp932 で化ける（実測）
+    assert 'cd /d %~dp0' in text                 # どこから呼ばれても自分の場所で動く
+    assert 'tools\\job_server.py' in text
+    assert 'server.log' in text                  # サーバーのログを捨てない
+    assert text.startswith('@echo off')
