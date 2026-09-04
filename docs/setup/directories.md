@@ -9,7 +9,10 @@
 | Windows | `Z:\work\3d-studio` | **借りている。** Hunyuan3D-Paint の環境（`venv-21`）と重み。別プロジェクト |
 
 `Z:` を借りていることは [ADR-0008](../adr/0008-texture-by-hunyuan3d-paint.md) の前提。
-parts-studio 単体で動く形にするかは [#3](https://github.com/na2-dev/parts-studio/issues/3) で判断する。
+**[#3](https://github.com/na2-dev/parts-studio/issues/3) で決着（2026-08-31）**:
+コードは parts-studio が持ち、**環境だけを借りたままにする**。場所は `--paint-root` と
+環境変数 `PARTS_STUDIO_PAINT_ROOT` で差し替えられる。自前で作る手順は
+[paint-environment.md](paint-environment.md)。
 
 ## リポジトリの中身
 
@@ -23,10 +26,15 @@ parts-studio/
 │   ├── setup/          環境構築とこの文書
 │   └── tasks/          タスクの索引（正は GitHub Issues）
 ├── tools/              ★本線で使う道具だけを置く
+├── tests/              道具のテスト（GPU 不要・pytest）
+├── patches/            上流に当てるパッチ
+├── web/                ブラウザ UI（ジョブサーバーが配る。vendor/ に同梱の外部ファイル）
+├── start_server.cmd    ジョブサーバーを立てる（ダブルクリック / タスクスケジューラ）
 ├── experiments/        本線で使っていないもの。動作を保証しない
 │
 │  ── 以下は git 管理外 ──
 ├── TRELLIS.2/          上流（clone）
+├── paint/              塗り環境（自前で作った場合。5.8GB）
 ├── _wheels/            ビルド済みホイールを借りている先（clone）
 ├── venv/  venv-bpy/    Python 環境（3.11 / bpy 用）
 ├── out/                生成物
@@ -34,7 +42,8 @@ parts-studio/
 └── testimg*/           入力の絵（題材ごとに置き換わる）
 ```
 
-※ `.gitignore` のパターンと一致させること（`/testimg*/`）。
+※ **git 管理外の欄は `.gitignore` と一致させること。** ここを直したら
+`.gitignore` も見ること（逆も同じ）。
 
 ## 守ること
 

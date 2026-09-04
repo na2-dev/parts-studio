@@ -1,0 +1,19 @@
+diff --git a/hy3dpaint/DifferentiableRenderer/mesh_utils.py b/hy3dpaint/DifferentiableRenderer/mesh_utils.py
+index 5b3e831..891e8bc 100644
+--- a/hy3dpaint/DifferentiableRenderer/mesh_utils.py
++++ b/hy3dpaint/DifferentiableRenderer/mesh_utils.py
+@@ -14,7 +14,13 @@
+ 
+ import os
+ import cv2
+-import bpy
++# ★2026-08-17：bpy は Python 3.11 用しか無く、この環境（3.12）には入りません。
++#   使っているのは最後の「OBJ→GLB変換」だけなので、無くても動くようにします。
++#   （変換が必要になったときだけ困るので、そのときにエラーを出します）
++try:
++    import bpy
++except ImportError:
++    bpy = None
+ import math
+ import numpy as np
+ from io import StringIO
