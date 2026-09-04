@@ -1,9 +1,14 @@
 # 形づくりは TRELLIS.2 を既定にし、多視点の条件付けは後段の課題にする
 
-> **訂正あり（2026-08-31）**: 「多視点の条件付けは後段」は解消済み。
-> [ADR-0005](0005-multiview-conditioning-by-token-concat.md) で実装し、
-> **4 View すべてを条件として渡している**。本文中の「当面 front だけが Reference View」は
-> もう当てはまらない。
+> **訂正あり（2026-08-31）**: 表題の「多視点の条件付けは後段の課題にする」は
+> [ADR-0005](0005-multiview-conditioning-by-token-concat.md) で覆った。
+> 4 枚とも条件として渡すのが本線である。
+>
+> したがって本文の「**当面 front だけが Reference View で、残り 3 View は Check View**」も
+> **もう成り立たない。4 View すべてが Reference View で、Check View は存在しない**
+> （[CONTEXT.md](../../CONTEXT.md)）。
+>
+> TRELLIS.2 を既定に採る部分と、ライセンス・メモリの記述は有効である。
 
 形づくりのモデルとして、多視点入力を学習済みの Hunyuan3D-2.0 mv ではなく **TRELLIS.2**
 （`microsoft/TRELLIS.2`・MIT・4B）を既定に採る。造形力の差は後から埋められないが、多視点の

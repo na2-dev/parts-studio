@@ -9,9 +9,12 @@
 > 移った結果、UV は色塗りAI が張っている。自前の UV 工程（`bake_to_uv.py`）は
 > [`experiments/`](../../experiments/README.md) へ隔離した。
 >
-> **ただし CONTEXT.md の「Unwrapped Shape は第一級の保存物」は残したままである。**
-> 本線に UV 工程が無い以上これは実態と合っていない。
-> どちらへ寄せるかは未決（[#3](https://github.com/na2-dev/parts-studio/issues/3) で扱う）。
+> **決着（2026-08-31・[#3](https://github.com/na2-dev/parts-studio/issues/3)）**:
+> CONTEXT.md の「Unwrapped Shape は第一級の保存物」は**取り下げた**。
+> 本線に UV 工程が無く、色塗り工程が塗るたびに Layout を張り直す以上、
+> 「同じ Layout のまま Texture だけ差し替える」ことは今はできない。
+> 用語としての Unwrapped Shape は残し、**保存していないことを明記**した。
+> 自前の UV 工程を戻すなら、この ADR ごと作り直すことになる。
 
 Hunyuan3D 系の色塗りは内部で UV 展開まで行うため、上流のままだと同じ Shape に塗り直すたびに
 Layout が変わり、Texture どうしに互換性が無い。Texture の作り直しと差し替えを中心に据えたいので、

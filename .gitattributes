@@ -1,0 +1,2 @@
+# cmd は CRLF でないと壊れることがある。checkout する環境によらず固定する
+start_server.cmd text eol=crlf
