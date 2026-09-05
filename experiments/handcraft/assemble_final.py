@@ -19,7 +19,12 @@ if nrm_p != 'none':                                   # 'none' なら法線マ�
     mat.normalTexture = Image.open(nrm_p).convert('RGB')
 # 内部規約（Z上・正面-Y）→ glTF（Y上・正面+Z）: (x,y,z) -> (x, z, -y)
 Vy = np.stack([V[:, 0], V[:, 2], -V[:, 1]], 1)
-out = trimesh.Trimesh(vertices=Vy, faces=F, process=False,
+# ★頂点法線も同じ回転で持ち越す（project_refs が参照で向きを揃えた法線を glb に入れている）。
+#   捨てて再計算すると巻き不一致の面が裏向きになり、ビューアで黒い斑になる（2026-09-05 実測）
+N = np.asarray(m.vertex_normals, np.float64)
+Ny = np.stack([N[:, 0], N[:, 2], -N[:, 1]], 1)
+mat.doubleSided = True
+out = trimesh.Trimesh(vertices=Vy, faces=F, vertex_normals=Ny, process=False,
                       visual=trimesh.visual.TextureVisuals(uv=UV, material=mat))
 out.export(out_p)
 print(f'保存: {out_p} / 面 {len(F):,} / albedo {alb.size} / normal / AO 強さ {strength}', flush=True)

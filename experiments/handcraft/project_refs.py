@@ -19,8 +19,10 @@ MIN_FACING = float(os.environ.get('MIN_FACING', 0.3))  # これ未満の向き�
 PAD = int(os.environ.get('PAD', 24))                   # 絵の輪郭の外へ色を延ばす px（描画解像度 1536 基準）
 PAD_MIN = float(os.environ.get('PAD_MIN', 0.3))        # 延ばした先端での重み
 SOLID_ERODE = int(os.environ.get('SOLID_ERODE', 2))    # 延ばす元の色を取る「完全に不透明な内側」の削り px
-FILL = os.environ.get('FILL', 'coherent')              # 埋め方: coherent（島の中で広げる→局所平滑）/ smooth（距離加重: 泥色になる）/ nearest（旧: 斑）
+FILL = os.environ.get('FILL', 'holecolor')             # 埋め方: holecolor（穴ごとに縁の中央値1色）/ coherent（島の中で広げる→局所平滑）/ smooth（距離加重: 泥色になる）/ nearest（旧: 斑）
 UV_SS = int(os.environ.get('UV_SS', 2))                # UV ラスタの超解像倍率（島の中の穴を消す）
+HOLE_SPLIT = os.environ.get('HOLE_SPLIT', '1') == '1'  # 穴を面の折れ目で分ける（目玉の裏をフードと分ける）
+HOLE_SPLIT_DEG = float(os.environ.get('HOLE_SPLIT_DEG', 35))
 os.makedirs(out_dir, exist_ok=True)
 dev = torch.device('cuda')
 
@@ -33,6 +35,24 @@ ctr = (V.max(0) + V.min(0)) / 2; V = V - ctr
 h = V[:, 2].max() - V[:, 2].min(); V = V / h            # 高さ 1 に正規化
 fn = np.asarray(m.face_normals, np.float32)
 vn = np.asarray(m.vertex_normals, np.float32)
+# ★NORMAL_REF: 巻きに頼らず法線の向きを決める。生成メッシュは巻きが揃わず（非多様体で伝播も失敗、
+#   部品多数決でも参照と一致 70%）、法線が裏向きの面は「カメラを向いていない」と判定されて埋めに回る。
+#   面ごとに、向きの揃った参照メッシュ（ボクセルリメッシュ後）の最寄り面と符号を合わせ、
+#   その面法線を面積重みで頂点に集めて頂点法線にする（2026-09-05）
+if os.environ.get('NORMAL_REF'):
+    from scipy.spatial import cKDTree
+    ref = trimesh.load(os.environ['NORMAL_REF'], force='mesh', process=False)
+    Vr = np.asarray(ref.vertices, np.float32); Vr = (Vr - (Vr.max(0) + Vr.min(0)) / 2); Vr = Vr / (Vr[:, 2].max() - Vr[:, 2].min())
+    rc = Vr[np.asarray(ref.faces)].mean(1); rn = np.asarray(ref.face_normals, np.float32)
+    _, j = cKDTree(rc).query(V[F].mean(1), k=1, workers=-1)
+    sign = np.where(np.einsum('ij,ij->i', fn, rn[j]) < 0, -1.0, 1.0).astype(np.float32)
+    fn = fn * sign[:, None]
+    area = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1)
+    acc_n = np.zeros_like(V)
+    for k_ in range(3):
+        np.add.at(acc_n, F[:, k_], fn * area[:, None])
+    vn = (acc_n / np.maximum(np.linalg.norm(acc_n, axis=1, keepdims=True), 1e-12)).astype(np.float32)
+    print(f'法線の向きを参照に合わせた: 反転 {(sign < 0).mean():.1%} の面', flush=True)
 print(f'メッシュ: 頂点 {len(V):,} 面 {len(F):,} 高さ→1', flush=True)
 
 Vt = torch.tensor(V, device=dev); Ft = torch.tensor(F, device=dev)
@@ -151,8 +171,20 @@ def _pool(x):   # (T*ss, T*ss, C) → (T, T, C) covered な小テクセルの平
     s = torch.nn.functional.avg_pool2d(x, UV_SS)[0].permute(1, 2, 0)
     n = torch.nn.functional.avg_pool2d(cov_ss[None, None], UV_SS)[0, 0]
     return s / n.clamp(min=1e-6)[..., None], n
-pos, cov_frac = _pool(pos_uv[0]); nrm, _ = _pool(nrm_uv[0])
+# ★位置と法線は小テクセルの【平均ではなく代表 1 つ】から取る。島が 2 万個・余白 1px の UV では、
+#   1 テクセルの中に別の島（3D では離れた場所）の小テクセルが同居し、平均すると宙に浮いた点になって
+#   可視判定に落ち、色も別の場所のものになった（2026-09-05: 貼れた面 37%、胸に橙の四角）
+_, cov_frac = _pool(pos_uv[0])
 covered = cov_frac > 0
+def _rep(x):   # 各テクセルで最初に covered な小テクセルの値
+    xs = x.reshape(TEX, UV_SS, TEX, UV_SS, -1).permute(0, 2, 1, 3, 4).reshape(TEX, TEX, UV_SS * UV_SS, -1)
+    cs = cov_ss.reshape(TEX, UV_SS, TEX, UV_SS).permute(0, 2, 1, 3).reshape(TEX, TEX, UV_SS * UV_SS)
+    first = torch.argmax(cs, dim=-1)                       # 最初の 1（無ければ 0）
+    return torch.gather(xs, 2, first[..., None, None].expand(TEX, TEX, 1, xs.shape[-1]))[:, :, 0]
+if os.environ.get('UV_REP', '1') == '1':
+    pos = _rep(pos_uv[0]); nrm = _rep(nrm_uv[0])
+else:
+    pos, _ = _pool(pos_uv[0]); nrm, _ = _pool(nrm_uv[0])
 nrm = torch.nn.functional.normalize(nrm, dim=-1)
 # 自分の三角形 ID（小テクセルごと）: (T, T, ss*ss)。可視判定で「どれか一致」を見る
 own_tris = rast_uv[0, ..., 3].reshape(TEX, UV_SS, TEX, UV_SS).permute(0, 2, 1, 3).reshape(TEX, TEX, UV_SS * UV_SS)
@@ -244,6 +276,164 @@ def coherent_fill(color, known, island, smooth_iters=4, smooth_k=12):
     return torch.tensor(C.reshape(TEX, TEX, 3), device=dev)
 
 
+def holecolor_fill(color, known, island, min_hole=64, band=6, blend_iters=8):
+    """穴ごとに「その縁で見えている色の中央値」1色で塗り、境目だけなじませる。
+
+    ★利用者の指摘「見えない部分は大体の想像をすれば同じ色」（2026-09-05）。
+      島の中で広げる方式（coherent_fill）は、目玉の裏に白と隣のフードの橙が筋になって混ざった。
+      穴の縁の中央値なら、縁の大半が白の目玉は白、帽子の天面は茶、股はズボンの青になる。
+      1. UV 上で「島の中の未知テクセル」を連結成分（穴）に分ける
+      2. 穴ごとに、1 テクセル外側の既知テクセルの色の中央値で塗る（小さい穴は島の中で広げる）
+      3. 島ごと空いている所は 3D 最近傍
+      4. 穴の縁 band テクセルだけ 3D 近傍平均でなじませる
+    """
+    from scipy import ndimage as _nd
+    from scipy.spatial import cKDTree
+    C = color.cpu().numpy().copy(); kn = known.cpu().numpy(); isl = island.cpu().numpy()
+    unknown = isl & ~kn
+    if HOLE_SPLIT:
+        # ★穴を「面の折れ目」で分ける。目玉の裏とフードの裏は UV では 1 つの穴だが、
+        #   3D では目玉（球）とフードの境に折れ目がある。隣接テクセルの法線が HOLE_SPLIT_DEG 以上
+        #   違う所や 3D で離れている所は繋がないで連結成分を取る → 目玉は目玉の縁の色（白）だけで埋まる
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        N = nrm.cpu().numpy(); Pp = pos.cpu().numpy()
+        idx = -np.ones((TEX, TEX), np.int64); ui = np.where(unknown.reshape(-1))[0]; idx.reshape(-1)[ui] = np.arange(len(ui))
+        cosmin = math.cos(math.radians(HOLE_SPLIT_DEG)); dmax = 3.0 / TEX
+        rows = []; cols = []
+        for dy, dx in ((0, 1), (1, 0)):
+            a = idx[:TEX - dy, :TEX - dx]; b = idx[dy:, dx:]
+            ok = (a >= 0) & (b >= 0)
+            na = N[:TEX - dy, :TEX - dx][ok]; nb = N[dy:, dx:][ok]
+            pa = Pp[:TEX - dy, :TEX - dx][ok]; pb = Pp[dy:, dx:][ok]
+            keep = ((na * nb).sum(-1) > cosmin) & (np.linalg.norm(pa - pb, axis=-1) < dmax)
+            rows.append(a[ok][keep]); cols.append(b[ok][keep])
+        rows = np.concatenate(rows); cols = np.concatenate(cols)
+        g = coo_matrix((np.ones(len(rows), np.uint8), (rows, cols)), shape=(len(ui), len(ui)))
+        n, cl = connected_components(g, directed=False)
+        lab = np.zeros((TEX, TEX), np.int64); lab.reshape(-1)[ui] = cl + 1
+    else:
+        lab, n = _nd.label(unknown, structure=np.ones((3, 3)))
+    sizes = np.bincount(lab.ravel())
+    # 縁: 未知の 1 テクセル外側にある既知テクセル。穴ラベルは膨張で伝える
+    dil = _nd.grey_dilation(lab, size=(3, 3))
+    rim = kn & (dil > 0)
+    rim_lab = dil[rim]; rim_col = C[rim]
+    order_ = np.argsort(rim_lab, kind='stable'); rim_lab = rim_lab[order_]; rim_col = rim_col[order_]
+    starts = np.searchsorted(rim_lab, np.arange(1, n + 1)); ends = np.searchsorted(rim_lab, np.arange(1, n + 1), side='right')
+    med = np.zeros((n + 1, 3), np.float32); has = np.zeros(n + 1, bool)
+    for i in range(1, n + 1):
+        if ends[i - 1] > starts[i - 1]:
+            med[i] = np.median(rim_col[starts[i - 1]:ends[i - 1]], axis=0); has[i] = True
+    big = (sizes >= min_hole) & has
+    big[0] = False
+    fill_mask = big[lab]
+    C[fill_mask] = med[lab[fill_mask]]
+    print(f'  埋め（穴の縁の中央値で1色）: 穴 {int(big.sum()):,} 個 / {int(fill_mask.sum()):,} テクセル', flush=True)
+    known2 = torch.tensor(kn | fill_mask, device=dev)
+    color2 = torch.tensor(C, device=dev)
+    # 小さい穴と縁なし（島ごと空き）はこれまでの方式
+    grown, known3 = grow_in_island(color2, known2, island)
+    rest = island & ~known3
+    out = nearest3d_fill(grown, known3, island)
+    print(f'  埋め（小さい穴を島の中で広げる）: {int((known3 & ~known2).sum()):,} / 島ごと空き→3D 最近傍: {int(rest.sum()):,}', flush=True)
+    # 境目をなじませる: 穴の縁から band 以内（穴側・既知側とも）
+    edge = _nd.binary_dilation(fill_mask, iterations=band) & ~_nd.binary_erosion(fill_mask, iterations=band) & isl
+    P = pos.cpu().numpy().reshape(-1, 3); Co = out.cpu().numpy().reshape(-1, 3).copy()
+    all_idx = np.where(isl.reshape(-1))[0]; e_idx = np.where(edge.reshape(-1))[0]
+    if len(e_idx) and len(all_idx) > 16:
+        tree = cKDTree(P[all_idx]); _, nb = tree.query(P[e_idx], k=16, workers=-1)
+        for _ in range(blend_iters):
+            Co[e_idx] = Co[all_idx][nb].mean(1)
+    return torch.tensor(Co.reshape(TEX, TEX, 3), device=dev)
+
+
+def holecolor3d_fill(color, known, island, min_hole=64, band=6, blend_iters=8, k=8, split_deg=35.0):
+    """holecolor_fill の 3D 版。穴の連結・縁・なじませを UV ではなく 3D 近傍グラフで取る。
+
+    ★島が数万個に砕けた UV（xatlas を 44 万三角形に掛けた場合）では、1 つの穴が島ごとに
+      分断され、穴ごとの色がバラバラの継ぎはぎになった（2026-09-05 実測）。
+      3D で近いテクセル同士（法線も近い）を繋げば、島の境を越えて 1 つの穴として扱える。
+    """
+    from scipy.spatial import cKDTree
+    from scipy.sparse import coo_matrix, csr_matrix
+    from scipy.sparse.csgraph import connected_components
+    isl = island.cpu().numpy().reshape(-1); kn = known.cpu().numpy().reshape(-1)
+    P = pos.cpu().numpy().reshape(-1, 3); N = nrm.cpu().numpy().reshape(-1, 3)
+    C = color.cpu().numpy().reshape(-1, 3).copy()
+    ii = np.where(isl)[0]; Pi = P[ii]; Ni = N[ii]; kni = kn[ii]
+    tree = cKDTree(Pi)
+    d, nb = tree.query(Pi, k=k + 1, workers=-1)
+    d = d[:, 1:]; nb = nb[:, 1:]
+    spacing = float(np.median(d[:, 0]))
+    src_ = np.repeat(np.arange(len(ii)), k); dst_ = nb.reshape(-1); dd = d.reshape(-1)
+    # ★距離の上限は 6 倍。2.5 倍だと 4096² で細かい三角形の島境のテクセルが孤立し、
+    #   なじませの平均が 0 になって黒い斑が出た（2026-09-05 実測）
+    ok = (dd < 6.0 * spacing) & ((Ni[src_] * Ni[dst_]).sum(-1) > math.cos(math.radians(split_deg)))
+    src_, dst_ = src_[ok], dst_[ok]
+    n_i = len(ii)
+    A = csr_matrix((np.ones(len(src_), np.float32), (src_, dst_)), shape=(n_i, n_i)); A = A.maximum(A.T)
+    unk = ~kni
+    # 未知同士の辺だけで連結成分
+    Au = A[unk][:, unk]
+    ncomp, lab_u = connected_components(Au, directed=False)
+    lab = np.full(n_i, -1); lab[unk] = lab_u
+    # 縁: 既知テクセルのうち未知に隣接するもの → 隣接する未知の成分に色を投票
+    Ak = A[unk][:, ~unk]                       # 行=未知, 列=既知
+    rows, cols = Ak.nonzero()                  # 未知 rows が 既知 cols と隣接
+    comp_of = lab_u[rows]; kcol = C[ii[~unk][cols]]
+    order_ = np.argsort(comp_of, kind='stable'); comp_s = comp_of[order_]; kcol = kcol[order_]
+    starts = np.searchsorted(comp_s, np.arange(ncomp)); ends = np.searchsorted(comp_s, np.arange(ncomp), side='right')
+    sizes = np.bincount(lab_u, minlength=ncomp)
+    med = np.zeros((ncomp, 3), np.float32); has = ends > starts
+    for c_ in np.where(has)[0]:
+        med[c_] = np.median(kcol[starts[c_]:ends[c_]], axis=0)
+    big = has & (sizes >= min_hole)
+    fill_u = big[lab_u]
+    Cu_idx = ii[unk]
+    C[Cu_idx[fill_u]] = med[lab_u[fill_u]]
+    print(f'  埋め3D（穴の縁の中央値で1色）: 穴 {int(big.sum()):,} 個 / {int(fill_u.sum()):,} テクセル（テクセル間隔 {spacing:.5f}）', flush=True)
+    # 残り（小さい穴・縁なし）: グラフ上で既知から伸ばす（反復平均）。既知にならないものは 3D 最近傍
+    known_now = kni.copy(); known_now[np.where(unk)[0][fill_u]] = True
+    Ci = C[ii]
+    for _ in range(64):
+        rest = ~known_now
+        if not rest.any():
+            break
+        Wk = A[rest][:, known_now]
+        cnt = np.asarray(Wk.sum(1)).ravel()
+        got = cnt > 0
+        if not got.any():
+            break
+        newc = (Wk @ Ci[known_now]) / np.maximum(cnt, 1)[:, None]
+        ridx = np.where(rest)[0][got]
+        Ci[ridx] = newc[got]; known_now[ridx] = True
+    left = ~known_now
+    if left.any():
+        t2 = cKDTree(Pi[known_now]); _, j = t2.query(Pi[left], k=1, workers=-1)
+        Ci[left] = Ci[known_now][j]
+    print(f'  埋め3D（伸ばし＋最近傍）: {int((~kni).sum() - fill_u.sum()):,} テクセル', flush=True)
+    # なじませ: 1色で塗った穴の縁から band ホップ以内を、グラフ近傍の平均で反復
+    fm = np.zeros(n_i, bool); fm[np.where(unk)[0][fill_u]] = True
+    edge = fm.copy(); front = fm.copy()
+    for _ in range(band):
+        front = (A @ front.astype(np.float32)) > 0
+        edge |= front
+    inner = fm.copy()
+    for _ in range(band):
+        inner &= ~(((A @ (~inner).astype(np.float32)) > 0))
+    edge &= ~inner
+    e_idx = np.where(edge)[0]
+    if len(e_idx):
+        Ae = A[e_idx]; cnt = np.asarray(Ae.sum(1)).ravel()
+        okc = cnt > 0                          # ★隣が無いテクセルは触らない（0 で割ると黒になる）
+        Ae = Ae[okc]; e_idx = e_idx[okc]; cnt = cnt[okc][:, None]
+        for _ in range(blend_iters):
+            Ci[e_idx] = (Ae @ Ci) / cnt
+    C[ii] = Ci
+    return torch.tensor(C.reshape(TEX, TEX, 3), device=dev)
+
+
 def clean_outliers3d(color, known, k=24, thresh=0.25):
     """3D 近傍 k 個の色の中央値から遠いテクセルを中央値に置き換える（小さな斑を消す）。"""
     from scipy.spatial import cKDTree
@@ -290,6 +480,10 @@ def grow_in_island(color, known, island):
 #   前後で決まった基準色と食い違う横の色は捨てる。
 acc = torch.zeros((TEX, TEX, 3), device=dev); wsum = torch.zeros((TEX, TEX), device=dev)
 phantom = torch.zeros((TEX, TEX), dtype=torch.bool, device=dev)
+#   ★結果: 逆効果。服の側面（正面からは腕に隠れる）まで捨てて肌色の埋めが広がった。既定は切る
+OCC_COLOR = os.environ.get('OCC_COLOR', '0') == '1'
+OCC_COLOR_TOL = float(os.environ.get('OCC_COLOR_TOL', 0.15))
+occl = {}
 PHANTOM_PX = float(os.environ.get('PHANTOM_PX', 12))
 per_view = {}
 MAXDIFF = float(os.environ.get('MAXDIFF', 0.25))       # 基準色との許容差（RGB 距離）
@@ -359,8 +553,21 @@ for th in order:
     # alpha は fit_image で「絵の内側=1、外側は PAD px まで線形に PAD_MIN へ」にしてある
     inside = col[..., 3] > 0.05
     w = facing * visible.float() * inside.float() * col[..., 3] * covered.float()
+    # ★遮蔽物の色と同じ横の色は捨てる（OCC_COLOR）。顎の下の胸は正面からはフード/顎に隠れて見えず、
+    #   横の絵だけが貼る。横の絵ではそこにフードが描かれているので胸が橙になった（2026-09-05 実測）。
+    #   正面の絵で「その位置を隠している物の色」を覚えておき、横の絵の色がそれと同じなら
+    #   横の絵も同じ物（フード）を見ていると判断して捨て、埋めに回す（周りの胸の青が入る）
+    if th in (0, 180) and OCC_COLOR:
+        occl[th] = (covered & inside & ~visible, col[..., :3].clone())
     if th in (90, 270):
         w = w * SIDE_W
+        if OCC_COLOR:
+            rej = torch.zeros_like(w, dtype=torch.bool)
+            for th0, (occ_m, occ_c) in occl.items():
+                rej |= occ_m & ((col[..., :3] - occ_c).norm(dim=-1) < OCC_COLOR_TOL)
+            rej &= w > 0
+            print(f'  {th:3d}°: 遮蔽物と同じ色なので捨てた横の色 {int(rej.sum()):,} テクセル', flush=True)
+            w = torch.where(rej, torch.zeros_like(w), w)
         if CONSENSUS:
             (cf, okf), (cb, okb) = relaxed[0], relaxed[180]
             agree = okf & okb & ((cf - cb).norm(dim=-1) < float(os.environ.get('CONS_AGREE', 0.15)))
@@ -401,6 +608,16 @@ for th in order:
         base_col = nearest3d_fill(acc / wsum.clamp(min=1e-6)[..., None], fb_known, covered)
         base_w = covered.float()
     per_view[th] = float((w > 0.01).float().sum() / covered.float().sum())
+    if os.environ.get('DEBUG_SRC') == '1':
+        bad = covered & (cosang >= MIN_FACING) & inside & ~visible
+        gap = (P[..., 1] - d_seen)[bad]
+        if gap.numel():
+            q = torch.quantile(gap.float()[:200000], torch.tensor([0.1, 0.5, 0.9], device=dev))
+            print(f'    隠れ判定で落ちた面の奥行き差 (P.y - d_seen): 10% {q[0]:.4f} / 50% {q[1]:.4f} / 90% {q[2]:.4f}  件数 {int(bad.sum()):,}', flush=True)
+        cv = covered.float().sum()
+        print(f'    内訳 {th}: cos>MIN {((cosang >= MIN_FACING) & covered).float().sum() / cv:.1%} '
+              f'visible {(visible & covered).float().sum() / cv:.1%} same_tri {(same_tri & covered).float().sum() / cv:.1%} '
+              f'inside {(inside & covered).float().sum() / cv:.1%} all {((cosang >= MIN_FACING) & visible & inside & covered).float().sum() / cv:.1%}', flush=True)
     print(f'  {th:3d}° ({assign[th]}): 貼れたテクセル {per_view[th]:.1%}', flush=True)
 
 if PHANTOM_PX > 0:
@@ -440,7 +657,13 @@ print(f'合計: 何かの向きから貼れたテクセル {(filled & covered).f
 #   2. 島の外（すき間）は最後に最近傍で埋める（バイリニアのにじみ対策）
 # ★塗り残しは【3D で最も近い】貼れたテクセルの色で埋める。UV の島で広げると
 #   足のオレンジが股に入った（実測）。3D なら股の隣はズボン＝水色
-if FILL == 'coherent':
+if FILL == 'holecolor3d':
+    alb = holecolor3d_fill(albedo, filled & covered, covered, min_hole=int(os.environ.get('MIN_HOLE', 64)),
+                           band=int(os.environ.get('BLEND_BAND', 6)), split_deg=HOLE_SPLIT_DEG)
+elif FILL == 'holecolor':
+    alb = holecolor_fill(albedo, filled & covered, covered, min_hole=int(os.environ.get('MIN_HOLE', 64)),
+                         band=int(os.environ.get('BLEND_BAND', 6)))
+elif FILL == 'coherent':
     alb = coherent_fill(albedo, filled & covered, covered, smooth_iters=int(os.environ.get('SMOOTH_ITERS', 4)), smooth_k=int(os.environ.get('SMOOTH_K', 12)))
 elif FILL == 'smooth':
     alb = smooth_fill(albedo, filled & covered, covered,
@@ -483,7 +706,14 @@ json.dump({'assign': {str(k): v for k, v in assign.items()},
 from trimesh.visual.material import PBRMaterial
 mat = PBRMaterial(baseColorTexture=Image.open(os.path.join(out_dir, 'albedo.png')),
                   metallicFactor=0.0, roughnessFactor=0.9)
-out = trimesh.Trimesh(vertices=m.vertices, faces=F, process=False,
+# ★書き出す glb にも、参照で揃えた向きを入れる（巻きを反転＋頂点法線を保存）。
+#   巻きが不一致のままだと Eevee/ビューアが裏向きの面を暗く描き、黒い斑に見えた（2026-09-05 実測。
+#   テクスチャ自体には黒は無かった）。両面描画も指定して裏面カリングの事故を防ぐ
+F_out = F.copy()
+if os.environ.get('NORMAL_REF'):
+    F_out[sign < 0] = F_out[sign < 0][:, ::-1]
+mat.doubleSided = True
+out = trimesh.Trimesh(vertices=m.vertices, faces=F_out, vertex_normals=vn, process=False,
                       visual=trimesh.visual.TextureVisuals(uv=UV, material=mat))
 out.export(os.path.join(out_dir, 'projected.glb'))
 print('保存:', os.path.join(out_dir, 'projected.glb'), flush=True)

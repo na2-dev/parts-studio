@@ -47,7 +47,14 @@ def setup(path):
     cam_d = bpy.data.cameras.new('c'); cam_d.type = 'PERSP'; cam_d.lens = 50
     cam = bpy.data.objects.new('c', cam_d); bpy.context.collection.objects.link(cam)
     sc = bpy.context.scene; sc.camera = cam
-    if flat:
+    if os.environ.get('TT_CLAY') == '1':
+        # 素の形だけを見る（テクスチャ無し・単色・凹凸強調）。ギザギザが形か継ぎ目かを切り分ける
+        sc.render.engine = 'BLENDER_WORKBENCH'
+        sc.display.shading.light = 'STUDIO'
+        sc.display.shading.color_type = 'SINGLE'
+        sc.display.shading.single_color = (0.8, 0.8, 0.8)
+        sc.display.shading.show_cavity = True
+    elif flat:
         sc.render.engine = 'BLENDER_WORKBENCH'
         sc.display.shading.light = 'FLAT'
         sc.display.shading.color_type = 'TEXTURE'
